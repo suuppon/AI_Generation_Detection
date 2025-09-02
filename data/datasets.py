@@ -3,7 +3,7 @@
 import os
 from typing import List, Tuple, Optional, Dict, Union
 from PIL import Image
-
+import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -13,6 +13,29 @@ from utils.feature_manager import FeatureManager
 
 Tensor = torch.Tensor
 
+
+def _load_image_any(image: Union[str, np.ndarray, torch.Tensor]) -> np.ndarray:
+    """
+    입력이 path/ndarray/torch.Tensor 어떤 것이든 RGB uint8 ndarray로 통일.
+    """
+    if isinstance(image, str):
+        if cv2 is not None:
+            arr = cv2.imread(image, cv2.IMREAD_COLOR)  # BGR
+            if arr is None:
+                raise ValueError(f"Failed to read image: {image}")
+            arr = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+            return arr
+        else:
+            with Image.open(image) as im:
+                return np.array(im.convert("RGB"), copy=True)
+    elif isinstance(image, np.ndarray):
+        return image
+    elif torch.is_tensor(image):
+        arr = image.detach().cpu().numpy()
+        # 채널/타입은 호출부에서 맞춘다고 가정
+        return arr
+    else:
+        raise TypeError(f"Unsupported image type: {type(image)}")
 
 # -----------------------------
 # Processor Builder
@@ -40,16 +63,9 @@ class ProcessorBuilder:
     def process_one(self, image: Union[str, np.ndarray, torch.Tensor]) -> Dict[str, Tensor]:
         """
         단일 이미지에 대해 선택된 features를 모두 적용, {"edge":C,H,W, ...} 반환
+        - 이미지는 1회만 로드하여 ndarray로 만든 뒤 모든 feature에 재사용
         """
-        out: Dict[str, Tensor] = {}
-        for k in self.features:
-            if k == "edge":
-                out[k] = self.manager.preprocess_edge(image)     # [C,H,W]
-            elif k == "texture":
-                out[k] = self.manager.preprocess_texture(image)  # [C,H,W]
-            elif k == "other":
-                out[k] = self.manager.preprocess_other(image)    # [C,H,W]
-        return out
+        return self.manager.preprocess_selected(image, self.features)  # {"edge":..., "texture":..., ...}
 
 
 # -----------------------------
