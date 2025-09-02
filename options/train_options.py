@@ -22,5 +22,12 @@ class TrainOptions(BaseOptions):
         # parser.add_argument('--model_path')
         # parser.add_argument('--no_resize', action='store_true')
         # parser.add_argument('--no_crop', action='store_true')
+        
+        parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 weight decay')
+        parser.add_argument('--sched', type=str, default='cosine', choices=['cosine','step','none'],
+                            help='lr scheduler type')
+        parser.add_argument('--warmup_steps', type=int, default=0, help='warmup steps for scheduler')
+        parser.add_argument('--save_best_metric', type=str, default='val_acc',
+                            help='metric name to track best checkpoint (e.g., val_acc, val_auc, val_loss)')
         self.isTrain = True
         return parser
