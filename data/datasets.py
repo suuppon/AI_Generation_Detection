@@ -182,16 +182,7 @@ class MultiProcVideoDataset(Dataset):
                 return self.__getitem__(new_idx)
             features_map[k] = torch.stack(features_map[k], dim=0)  # [T,C,H,W]
 
-        if self.mode == "dict":
-            return features_map, label
-
-        # concat 모드: C축으로 합치기
-        videos: List[Tensor] = []
-        for k in self.processor.features:
-            videos.append(features_map[k])  # [T,C,H,W]
-        # 채널 합치기: [T, sumC, H, W]
-        video_concat = torch.cat(videos, dim=1)
-        return video_concat, label
+        return features_map, label
 
 
 # -----------------------------
