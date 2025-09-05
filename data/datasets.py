@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-
+from tqdm import tqdm
 # === 네가 제공한 파일을 import ===
 from utils.feature_manager import FeatureManager
 
@@ -164,7 +164,7 @@ class MultiProcVideoDataset(Dataset):
         # features_map: {"edge":[T,C,H,W], "texture":[T,C,H,W], ...}
         features_map: Dict[str, List[Tensor]] = {k: [] for k in self.processor.features}
 
-        for fp in frame_paths:
+        for fp in tqdm(frame_paths):
             try:
                 processed = self.processor.process_one(fp)  # {"edge":C,H,W, ...}
                 for k, t in processed.items():
