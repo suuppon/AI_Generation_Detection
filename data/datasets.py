@@ -52,13 +52,9 @@ class ProcessorBuilder:
         self.manager = FeatureManager(config_path=config_path)
         # 사용 가능한 키 검증
         all_keys = set(self.manager.preprocessors.keys())  # {'texture','edge','other'}
-        if features is None:
-            self.features = sorted(list(all_keys))
-        else:
-            unknown = set(features) - all_keys
-            if unknown:
-                raise ValueError(f"Unknown features: {unknown} (available: {sorted(list(all_keys))})")
-            self.features = features
+
+        self.features = sorted(list(all_keys))
+
 
     def process_one(self, image: Union[str, np.ndarray, torch.Tensor]) -> Dict[str, Tensor]:
         """
@@ -157,32 +153,41 @@ class MultiProcVideoDataset(Dataset):
         return paths
 
     def __getitem__(self, idx: int):
-        vdir, label = self.index[idx]
-        frame_paths = self._sorted_frames(vdir)
-
-        # 각 프레임에 대해 다중 전처리 적용
-        # features_map: {"edge":[T,C,H,W], "texture":[T,C,H,W], ...}
-        features_map: Dict[str, List[Tensor]] = {k: [] for k in self.processor.features}
-
-        for fp in tqdm(frame_paths):
+        # 유효한 샘플을 찾을 때까지 무한 루프
+        while True:
             try:
-                processed = self.processor.process_one(fp)  # {"edge":C,H,W, ...}
-                for k, t in processed.items():
-                    features_map[k].append(t)
-            except Exception:
-                # 손상 프레임이 있으면 비디오 전체를 스킵하고 다른 샘플로 대체
-                new_idx = np.random.randint(0, len(self))
-                return self.__getitem__(new_idx)
+                vdir, label = self.index[idx]
+                frame_paths = self._sorted_frames(vdir)
 
-        # 스택: feature별 [T,C,H,W]
-        for k in list(features_map.keys()):
-            if len(features_map[k]) == 0:
-                # 비어있으면 다른 샘플로 대체
-                new_idx = np.random.randint(0, len(self))
-                return self.__getitem__(new_idx)
-            features_map[k] = torch.stack(features_map[k], dim=0)  # [T,C,H,W]
+                if not frame_paths:
+                    raise RuntimeError("비디오에서 프레임을 찾을 수 없습니다.")
 
-        return features_map, label
+                # 모든 프레임에 대해 다중 전처리 적용
+                features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
+
+                for fp in tqdm(frame_paths, desc=f"Processing {vdir}"):
+                    processed = self.processor.process_one(fp)
+                    for k, t in processed.items():
+                        features_map[k].append(t)
+                
+                # --- 프레임 처리 완료 후, 데이터 유효성 검사 ---
+                # 비어있는 features_map이 있는지 확인
+                if any(len(v) == 0 for v in features_map.values()):
+                    raise RuntimeError("처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다.")
+                
+                # 모든 특징들을 텐서로 스택
+                for k in list(features_map.keys()):
+                    features_map[k] = torch.stack(features_map[k], dim=0)
+
+                return features_map, label
+                
+            except Exception as e:
+                # 에러 발생 시 현재 인덱스 건너뛰고 새로운 인덱스 선택
+                print(f"인덱스 {idx} 비디오 처리 중 오류 발생: {e}. 새로운 샘플을 찾습니다.")
+                
+                # 무작위로 새로운 인덱스를 선택
+                idx = np.random.randint(0, len(self))
+                # while 루프의 다음 반복에서 새로운 인덱스로 다시 시도
 
 
 # -----------------------------
