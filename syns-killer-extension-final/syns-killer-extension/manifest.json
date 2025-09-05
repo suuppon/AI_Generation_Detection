@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Syns-killer",
+  "version": "0.1.0",
+  "description": "Analyze YouTube video frames and visualize results.",
+  "action": {
+    "default_title": "Syns-killer",
+    "default_popup": "src/popup.html"
+  },
+  "host_permissions": ["http://localhost:5000/*"],
+  "permissions": ["storage"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["src/content.js"],
+      "css": ["src/content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

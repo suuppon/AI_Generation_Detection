@@ -1,0 +1,19 @@
+{
+    "Syns-killer Result": {
+      "edge feature":   { "label": "fake", "confidence": 0.89 },
+      "texture feature":{ "label": "fake", "confidence": 0.91 },
+      "etc feature":    { "label": "fake", "confidence": 0.74 },
+  
+      "descriptions": {
+        "edge feature": "Boundaries and outlines of objects.",
+        "texture feature": "Surface patterns and regularity.",
+        "etc feature": "Color, brightness, and overall structure."
+      },
+  
+      "summary": "This video includes synthetic component",
+      "final label": "synthetic",              
+      "final confidence": 0.86,                
+      "version": "1.0.0",                      
+      "timestamp": "2025-09-02T21:40:00+09:00" 
+    }
+  }
