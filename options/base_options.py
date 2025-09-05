@@ -44,8 +44,6 @@ class BaseOptions():
         
         parser.add_argument('--features', type=str, default='edge,texture',
                             help='comma-separated features to use: edge,texture,other')
-        parser.add_argument('--proc_mode', type=str, default='concat', choices=['concat','dict'],
-                            help='how to combine multi-features for model input')
         parser.add_argument('--proc_config', type=str, default='',
                             help='JSON path for FeatureManager configuration (optional)')
         parser.add_argument('--max_videos_per_class', type=int, default=-1,
