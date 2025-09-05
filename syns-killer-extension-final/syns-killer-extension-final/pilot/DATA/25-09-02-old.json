@@ -1,0 +1,18 @@
+{
+    "Syns-killer Result": {
+      "edge feature": {
+        "label": "fake",
+        "confidence": 0.89
+      },
+      "texture feature": {
+        "label": "fake",
+        "confidence": 0.91
+      },
+      "etc feature": {
+        "label": "fake",
+        "confidence": 0.74
+      },
+      "summary": "This video includes synthetic video"
+    }
+  }
+  
