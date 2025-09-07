@@ -69,7 +69,7 @@ class BaseOptions():
         parser.add_argument('--grad_clip', type=float, default=0.0, help='clip grad norm if > 0')
 
         # === Multi-Tower / Fusion ===
-        parser.add_argument('--num_towers', type=int, default=4,
+        parser.add_argument('--num_towers', type=int, default=3,
                             help='0이면 features 길이(or 1)로 자동 결정')
         parser.add_argument('--tower_devices', type=str, default='',
                             help='멀티타워 장치 매핑. 예) "0,1,2" (비우면 main_device 사용)')

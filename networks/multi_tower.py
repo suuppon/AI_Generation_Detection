@@ -28,7 +28,7 @@ class MultiTowerFromCloned(nn.Module):
 
     def __init__(self,
                  base_model: nn.Module,
-                 n_towers: int = 4,
+                 n_towers: int = 3,
                  num_classes: Optional[int] = 1,     # binary 가정
                  tower_device_map: Optional[Dict[str, torch.device]] = None,
                  tower_devices: Optional[List[torch.device]] = None,
@@ -46,14 +46,14 @@ class MultiTowerFromCloned(nn.Module):
         self.main_device = main_device or next(base_model.parameters()).device
 
         # 타워 이름
-        tower_names = ["edge", "texture", "other", "temporal"]
+        tower_names = ["edge", "texture", "other"]
         
         assert len(tower_names) == n_towers and len(set(tower_names)) == len(tower_names)
         self.tower_names: List[str] = tower_names
         self._name_to_idx = {name: i for i, name in enumerate(self.tower_names)}
 
         # clone towers
-        self.towers = nn.ModuleList([copy.deepcopy(base_model) for _ in range(n_towers-1)])
+        self.towers = nn.ModuleList([copy.deepcopy(base_model) for _ in range(n_towers)])
         self.num_classes: Optional[int] = num_classes
 
         # 디바이스 배치
@@ -108,8 +108,8 @@ class MultiTowerFromCloned(nn.Module):
         clip_embeds, tower_scores = [], []
         for x_bfchw, tower, tower_name in zip(inputs, self.towers, self.tower_names):
             logits_bf, embeds_bfe = self._logits_and_embeddings_one(x_bfchw, tower)
-            if tower_name == temporal:
-                log
+            # if tower_name == temporal:
+            #     log
             probs_bf = torch.sigmoid(logits_bf)
             kk = max(1, min(k, probs_bf.size(1)))
             topk_vals, topk_idx = torch.topk(probs_bf, k=kk, dim=1)         # (B,k)

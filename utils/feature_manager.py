@@ -11,8 +11,7 @@ import cv2
 from utils.data_processor import (
     TexturePreprocessor,
     EdgePreprocessor,
-    OtherPreprocessor,
-    TemporalWindowPreprocessor,  # ★ 경로 리스트를 입력받아 내부에서 앞/뒤 프레임을 직접 로드
+    OtherPreprocessor, # ★ 경로 리스트를 입력받아 내부에서 앞/뒤 프레임을 직접 로드
 )
 
 ImageLike = Union[str, np.ndarray, torch.Tensor]
@@ -107,7 +106,6 @@ class FeatureManager:
         self.preprocessors['texture']  = TexturePreprocessor(**cfg['texture'])
         self.preprocessors['edge']     = EdgePreprocessor(**cfg['edge'])
         self.preprocessors['other']    = OtherPreprocessor(**cfg['other'])
-        self.preprocessors['temporal'] = TemporalWindowPreprocessor(**cfg['temporal'])  # ★
 
     # -----------------------------
     # 단일 프레임용 (spatial features)
@@ -143,17 +141,6 @@ class FeatureManager:
         """texture/edge/other 전부를 1회 로드로 처리 (temporal 제외)"""
         return self.preprocess_selected(image, ['texture', 'edge', 'other'])
 
-    # -----------------------------
-    # 시퀀스(프레임 경로 리스트) 전용
-    # -----------------------------
-    def preprocess_temporal_paths(self, frame_paths: List[str]) -> torch.Tensor:
-        """
-        프레임 '경로 리스트'를 받아 (Seq_len, Frames_per_step, C, H, W)를 반환.
-        내부에서 앞/뒤 프레임까지 직접 로드하여 윈도우 구성.
-        """
-        proc: TemporalWindowPreprocessor = self.preprocessors['temporal']
-        return proc.preprocess_paths(frame_paths)
-
     def preprocess_sequence_selected_paths(self, frame_paths: List[str], features: List[str]) -> Dict[str, torch.Tensor]:
         """
         시퀀스 입력에서 선택된 feature 처리.
@@ -161,11 +148,6 @@ class FeatureManager:
         - 나머지 spatial features → 모든 프레임을 독립 처리 후 [T, C, H, W]
         """
         out: Dict[str, torch.Tensor] = {}
-        want_temporal = 'temporal' in features
-
-        # temporal 먼저
-        if want_temporal:
-            out['temporal'] = self.preprocess_temporal_paths(frame_paths)
 
         # spatial들
         spatial = [k for k in features if k != 'temporal']
