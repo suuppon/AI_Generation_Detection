@@ -9,6 +9,7 @@ from data import create_dataloader
 from utils.trainer import Trainer
 from options.train_options import TrainOptions
 from util import Logger
+import validate
 
 
 def seed_torch(seed: int = 1029):
