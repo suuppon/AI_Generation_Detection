@@ -1,17 +1,15 @@
 # networks/multi_tower.py
 import copy
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .fusion_head import TopKWeightedTowerFusion  # ★ Fusion Head 내장 사용
+
 Tensor = torch.Tensor
 
 def _parse_devices(tower_devices: str, fallback_device: torch.device):
-    """
-    '0,1,2' 형태의 문자열을 받아 장치 리스트를 반환.
-    비어있으면 None(=모든 타워를 fallback_device에 배치).
-    """
     if not tower_devices:
         return None
     ids = [s.strip() for s in tower_devices.split(',') if s.strip() != '']
@@ -19,140 +17,139 @@ def _parse_devices(tower_devices: str, fallback_device: torch.device):
         return None
     return [torch.device(f'cuda:{int(x)}') for x in ids]
 
+
 class MultiTowerFromCloned(nn.Module):
     """
-    동일한 base_model을 N개 clone하여 feature별로 독립 학습.
-    입력:
-      - dict 모드: {"edge":[B,T,C,H,W], "texture":[B,T,C,H,W], ...} (features_order와 1:1 매핑)
-      - concat/공유 모드: [B,T,C,H,W] → 모든 타워에 동일 입력
-
-    내부 처리 trick:
-      - 시계열을 유지한 채, forward에서만 [B*T, C, H, W]로 펴서 모델을 한 방에 태움 → [B,T,num_classes]로 복원.
-
-    결합:
-      - 'avg_logits': 타워별 logits 시퀀스 평균 → probs_seq = softmax(logits_seq)
-      - 'softvote' : 타워별 probs 시퀀스 평균 → logits_seq = log(probs_seq)
-    반환 키:
-      {
-        "logits_seq": [B,T,C],     # 최종(타워 결합 후) 시퀀스 로짓
-        "probs_seq":  [B,T,C],     # 최종(타워 결합 후) 시퀀스 확률
-        "logits":      [B,C],      # 시간 평균 집계(훈련용 편의)
-        "probs":       [B,C],      # 시간 평균 집계(훈련용 편의)
-        "towers": {
-          <feature or idx>: {
-            "logits_seq": [B,T,C],
-            "probs_seq":  [B,T,C],
-            "topk_idx":   [B,T,K],
-            "topk_val":   [B,T,K],
-          }, ...
-        }
-      }
+    동일한 base_model을 N개 clone (N>=1). dict/list/tensor 입력 지원.
+    내부에 TopK 임베딩 집계 + Fusion Head까지 포함.
+    호출: forward(inputs) → (B,) fusion logits
+    부가 산출물 필요 시 return_aux=True로 받아갈 수 있음.
     """
-class MultiTowerFromCloned(nn.Module):
+
     def __init__(self,
                  base_model: nn.Module,
                  n_towers: int = 2,
-                 num_classes: Optional[int] = None,
-                 combine: str = 'avg_logits',
-                 features_order: Optional[List[str]] = None,
+                 num_classes: Optional[int] = 1,     # binary 가정
+                 tower_names: Optional[List[str]] = None,
+                 tower_device_map: Optional[Dict[str, torch.device]] = None,
                  tower_devices: Optional[List[torch.device]] = None,
-                 main_device: Optional[torch.device] = None):
+                 main_device: Optional[torch.device] = None,
+                 # Top-K & Fusion 설정
+                 topk: int = 3,
+                 embed_dim: int = 512,
+                 fusion_hidden: int = 512,
+                 fusion_dropout: float = 0.1,
+                 fusion_use_gate: bool = True,
+                 fusion_pool: str = "attn"):
         super().__init__()
-        assert n_towers >= 2, "n_towers must be >= 2"
-        self.combine = combine
+        assert n_towers >= 1, "n_towers must be >= 1"
+        self.topk = int(topk)
         self.main_device = main_device or next(base_model.parameters()).device
-        self.features_order = features_order
+
+        # 타워 이름
+        if tower_names is None:
+            tower_names = [f"tower{i}" for i in range(n_towers)]
+        assert len(tower_names) == n_towers and len(set(tower_names)) == len(tower_names)
+        self.tower_names: List[str] = tower_names
+        self._name_to_idx = {name: i for i, name in enumerate(self.tower_names)}
 
         # clone towers
         self.towers = nn.ModuleList([copy.deepcopy(base_model) for _ in range(n_towers)])
+        self.num_classes: Optional[int] = num_classes
 
-        # place towers on devices (optional true model-parallel)
-        self.tower_devices = tower_devices   # << 여기서 Trainer에서 넘겨준 리스트 그대로 사용
-        if self.tower_devices is not None:
-            assert len(self.tower_devices) >= len(self.towers), \
-                "Provide at least as many devices as towers"
-            for mod, dev in zip(self.towers, self.tower_devices):
+        # 디바이스 배치
+        if tower_device_map is not None:
+            self.tower_device_map = {k: v for k, v in tower_device_map.items()}
+            for name, mod in zip(self.tower_names, self.towers):
+                dev = self.tower_device_map.get(name, self.main_device)
                 mod.to(dev)
+        elif tower_devices is not None:
+            assert len(tower_devices) >= len(self.towers)
+            for mod, dev in zip(self.towers, tower_devices):
+                mod.to(dev)
+            self.tower_device_map = {name: dev for name, dev in zip(self.tower_names, tower_devices)}
         else:
             for mod in self.towers:
                 mod.to(self.main_device)
+            self.tower_device_map = {name: self.main_device for name in self.tower_names}
 
-        # concat 모드일 때 Linear head 추가 (여긴 그대로 두셔도 됩니다)
-        if self.combine == 'concat':
-            if num_classes is None:
-                raise ValueError("num_classes must be provided when using 'concat'")
-            raise NotImplementedError("concat head not implemented")
+        # ★ Fusion Head 내장
+        self.fusion_head = TopKWeightedTowerFusion(
+            embed_dim=embed_dim,
+            n_towers=n_towers,
+            hidden=fusion_hidden,
+            dropout=fusion_dropout,
+            use_gate=fusion_use_gate,
+            pool=fusion_pool,
+        ).to(self.main_device)
 
-    def _forward_seq_tower(self, tower: nn.Module, x: Tensor, dev: Optional[torch.device]) -> Tensor:
+    # ---- 내부 헬퍼 ----
+    def _forward_frames_one(self, x_bfchw: Tensor, tower: nn.Module) -> Tensor:
+        B, F, C, H, W = x_bfchw.shape
+        x_bt = x_bfchw.view(B * F, C, H, W).to(next(tower.parameters()).device, non_blocking=True)
+        out_bt = tower(x_bt)                 # (B*F,1) 가정
+        return out_bt.view(B, F).to(self.main_device, non_blocking=True)
+
+    def _logits_and_embeddings_one(self, x_bfchw: Tensor, tower: nn.Module) -> Tuple[Tensor, Tensor]:
+        B, F, C, H, W = x_bfchw.shape
+        dev = next(tower.parameters()).device
+        x_bt = x_bfchw.view(B * F, C, H, W).to(dev, non_blocking=True)
+        logits_bf = tower(x_bt).view(B, F).to(self.main_device, non_blocking=True)  # (B,F)
+        embeds_be = tower.get_embedding(x_bt)                                       # (B*F,E)
+        embeds_bfe = embeds_be.view(B, F, -1).to(self.main_device, non_blocking=True)  # (B,F,E)
+        return logits_bf, embeds_bfe
+
+    def _build_fusion_inputs(self, inputs: List[Tensor], k: int) -> Tuple[Tensor, Tensor]:
         """
-        x: [B,T,C,H,W] 또는 [B,C,H,W]
-        return: logits_seq [B,T,num_classes]  (T가 없으면 T=1로 간주)
+        모든 타워(단일 포함)에 대해 Top-K 임베딩 가중합(clip_embed)과 score 계산.
+        returns: emb_bte (B,T,E), scores_bt (B,T)
         """
-        if x.dim() == 4:
-            # [B,C,H,W] -> [B,1,C,H,W]
-            x = x.unsqueeze(1)
-        B, T, C, H, W = x.shape
+        clip_embeds, tower_scores = [], []
+        for x_bfchw, tower in zip(inputs, self.towers):
+            logits_bf, embeds_bfe = self._logits_and_embeddings_one(x_bfchw, tower)
+            probs_bf = torch.sigmoid(logits_bf)
+            kk = max(1, min(k, probs_bf.size(1)))
+            topk_vals, topk_idx = torch.topk(probs_bf, k=kk, dim=1)         # (B,k)
+            w = torch.softmax(topk_vals, dim=1).unsqueeze(-1)               # (B,k,1)
+            idx = topk_idx.unsqueeze(-1).expand(-1, -1, embeds_bfe.size(-1))  # (B,k,E)
+            topk_embeds = torch.gather(embeds_bfe, dim=1, index=idx)        # (B,k,E)
+            clip_embed_be = (topk_embeds * w).sum(dim=1)                    # (B,E)
+            tower_score_b = topk_vals.mean(dim=1)                           # (B,)
+            clip_embeds.append(clip_embed_be)
+            tower_scores.append(tower_score_b)
+        emb_bte = torch.stack(clip_embeds, dim=1)    # (B,T,E)
+        scores_bt = torch.stack(tower_scores, dim=1) # (B,T)
+        return emb_bte, scores_bt
 
-        x_bt = x.reshape(B * T, C, H, W)
-        if dev is not None:
-            x_bt = x_bt.to(dev, non_blocking=True)
-            out_bt = tower(x_bt)               # [B*T, num_classes]
-            out_bt = out_bt.to(self.main_device, non_blocking=True)
+    # ---- 공개 forward ----
+    def forward(self,
+                inputs: Union[List[Tensor], Dict[str, Tensor], Tensor],
+                return_aux: bool = False) -> Union[Tensor, Dict[str, Tensor]]:
+        """
+        inputs: dict(listed by tower_names) | list[Tensor] | Tensor(shared)
+                각 텐서는 (B,F,C,H,W) 또는 (B,C,H,W).
+        반환:
+          - return_aux=False: fusion_logit_b (B,)
+          - return_aux=True : {"logit_b":(B,), "emb_bte":(B,T,E), "scores_bt":(B,T)}
+        """
+        # 입력 정규화 → list[Tensor] (그리고 (B,C,H,W) → (B,1,C,H,W))
+        if isinstance(inputs, dict):
+            xs = [inputs[name] for name in self.tower_names]
+        elif torch.is_tensor(inputs):
+            xs = [inputs for _ in self.towers]
         else:
-            out_bt = tower(x_bt)
+            xs = list(inputs)
+            assert len(xs) == len(self.towers), "len(inputs) must equal number of towers"
+        for i in range(len(xs)):
+            if xs[i].dim() == 4:
+                xs[i] = xs[i].unsqueeze(1)
 
-        out_seq = out_bt.view(B, T, self.num_classes)  # [B,T,C]
-        return out_seq
+        B, F = xs[0].shape[:2]
+        k = max(1, min(self.topk, F))
 
-    def forward(self, x: Union[Tensor, Dict[str, Tensor]]) -> Dict[str, Union[Tensor, Dict[str, Tensor]]]:
-        per_tower: Dict[str, Dict[str, Tensor]] = {}
-        logits_seq_list = []
-        probs_seq_list = []
+        emb_bte, scores_bt = self._build_fusion_inputs(xs, k)  # (B,T,E), (B,T)
+        logit_b = self.fusion_head(emb_bte, scores_bt)         # (B,)
 
-        # 입력 매핑
-        if isinstance(x, dict):
-            assert self.features_order is not None, "features_order must be provided for dict input"
-            assert len(self.features_order) == len(self.towers), "features_order size must equal n_towers"
-            it = enumerate(self.features_order)
-            get_feature = lambda key: x[key]  # noqa: E731
-        else:
-            it = enumerate(range(len(self.towers)))
-            get_feature = lambda _key: x      # noqa: E731
-
-        for i, key in it:
-            dev = None if self.tower_devices is None else self.tower_devices[i]
-            feats = get_feature(key)                          # [B,T,C,H,W] or [B,C,H,W]
-            logits_seq_i = self._forward_seq_tower(self.towers[i], feats, dev)  # [B,T,C]
-            probs_seq_i = F.softmax(logits_seq_i, dim=-1)     # [B,T,C]
-
-            # per-tower top-k (타임스텝별)
-            topk_val, topk_idx = torch.topk(probs_seq_i, k=self.topk, dim=-1)  # [B,T,K]
-
-            per_tower[str(key)] = {
-                "logits_seq": logits_seq_i,
-                "probs_seq": probs_seq_i,
-                "topk_idx": topk_idx,
-                "topk_val": topk_val,
-            }
-            logits_seq_list.append(logits_seq_i)
-            probs_seq_list.append(probs_seq_i)
-
-        # 타워 결합 (타임스텝별)
-        if self.combine == 'avg_logits':
-            logits_seq = torch.stack(logits_seq_list, dim=0).mean(dim=0)  # [B,T,C]
-            probs_seq = F.softmax(logits_seq, dim=-1)
-        else:  # 'softvote'
-            probs_seq = torch.stack(probs_seq_list, dim=0).mean(dim=0)    # [B,T,C]
-            logits_seq = torch.log(probs_seq.clamp_min(1e-8))             # 안정적 logit 대체
-
-        # 시간 축 집계(편의): 평균
-        logits = logits_seq.mean(dim=1)    # [B,C]
-        probs = probs_seq.mean(dim=1)      # [B,C]
-
-        return {
-            "logits_seq": logits_seq,      # [B,T,C]
-            "probs_seq": probs_seq,        # [B,T,C]
-            "logits": logits,              # [B,C]  (time-avg)
-            "probs": probs,                # [B,C]  (time-avg)
-            "towers": per_tower
-        }
+        if return_aux:
+            return {"logit_b": logit_b, "emb_bte": emb_bte, "scores_bt": scores_bt}
+        return logit_b
