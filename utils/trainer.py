@@ -229,7 +229,7 @@ class Trainer(BaseModel):
         xs, y = input
 
         if isinstance(xs, dict):
-            order = self.features_order or list(xs.keys())
+            order = list(xs.keys())
             views = [xs[k] for k in order]
         else:
             views = list(xs)
@@ -367,3 +367,7 @@ class Trainer(BaseModel):
         else:
             # 첫 번째 타워만 사용 (평가 호환 목적)
             return tower_modules[0](x_bchw.to(self.device))  # (B,1)
+
+
+
+

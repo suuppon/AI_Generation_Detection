@@ -205,7 +205,7 @@ if __name__ == '__main__':
 
         for i, data in enumerate(pbar):
             model.total_steps += 1
-            
+            #data ({k1:-,k2:-,k3:-},labels)
             # TODO : CHECK
             model.set_input(data)
             model.optimize_parameters()
@@ -248,6 +248,10 @@ if __name__ == '__main__':
             )
             model.adjust_learning_rate()
 
+        #정확도 Train
+
+        #정확도 Val
+        
     # 마지막 저장
     model.eval()
     model.save_networks('last')
