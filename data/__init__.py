@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 from torch.utils.data.sampler import WeightedRandomSampler
+import pickle
 
 from .datasets import (
     ProcessorBuilder,
@@ -83,6 +84,12 @@ def get_bal_sampler(dataset):
 
 def create_dataloader(opt,mode):
     dataset = get_dataset(opt,mode)
+
+    with open("./dataset.pkl", "wb") as f:
+        pickle.dump(dataset, f)
+    with open("./dataset.pkl", "rb") as f:
+        dataset = pickle.load(f)
+
     shuffle = not getattr(opt, "serial_batches", False) if (getattr(opt, "isTrain", True) and not getattr(opt, "class_bal", False)) else False
     sampler = get_bal_sampler(dataset) if getattr(opt, "class_bal", False) else None
     proc_mode = getattr(dataset, "_proc_mode", "dict")

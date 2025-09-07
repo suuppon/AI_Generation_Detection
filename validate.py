@@ -15,12 +15,10 @@ def validate(model, opt):
         y_true, y_pred = [], []
         for data,label in data_loader:
             out = model.forward(data)
-
-            print(f"Total score : {out}")
-            y_pred.append(out)
+            out = torch.sigmoid(out)
+            y_pred.append(out.cpu())
             y_true.append(label)
 
-    y_true = model.label
     
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     r_acc = accuracy_score(y_true[y_true==0], y_pred[y_true==0] > 0.5)
