@@ -68,6 +68,35 @@ class BaseOptions():
         parser.add_argument('--grad_accum_steps', type=int, default=1, help='gradient accumulation steps')
         parser.add_argument('--grad_clip', type=float, default=0.0, help='clip grad norm if > 0')
 
+        # === Multi-Tower / Fusion ===
+        parser.add_argument('--num_towers', type=int, default=0,
+                            help='0이면 features 길이(or 1)로 자동 결정')
+        parser.add_argument('--tower_devices', type=str, default='',
+                            help='멀티타워 장치 매핑. 예) "0,1,2" (비우면 main_device 사용)')
+
+        # clip 구성
+        parser.add_argument('--frames_per_clip', type=int, default=1,
+                            help='모델이 한 번에 처리하는 프레임 수(F)')
+        parser.add_argument('--topk', type=int, default=0,
+                            help='Fusion에서 사용할 프레임 Top-K (<=0이면 F//3로 자동)')
+
+        # Fusion Head 설정
+        parser.add_argument('--embedding_dim', type=int, default=512,
+                            help='base_model.get_embedding() 출력 차원')
+        parser.add_argument('--fusion_hidden', type=int, default=512,
+                            help='Fusion MLP hidden dim')
+        parser.add_argument('--fusion_dropout', type=float, default=0.1,
+                            help='Fusion dropout')
+        parser.add_argument('--fusion_pool', type=str, default='attn',
+                            choices=['attn', 'mean', 'max'],
+                            help='Fusion 내부 풀 방식')
+        # bool 플래그는 on/off 한 쌍으로
+        parser.add_argument('--fusion_use_gate', dest='fusion_use_gate',
+                            action='store_true', help='게이팅 사용 (기본 on)')
+        parser.add_argument('--no_fusion_gate', dest='fusion_use_gate',
+                            action='store_false', help='게이팅 끄기')
+        parser.set_defaults(fusion_use_gate=True)
+
         # 나머지 기존 옵션 그대로 ...
         self.initialized = True
         return parser
