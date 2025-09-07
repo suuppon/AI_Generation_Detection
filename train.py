@@ -150,6 +150,7 @@ from data import create_dataloader
 from utils.trainer import Trainer
 from options.train_options import TrainOptions
 from util import Logger
+import validate
 
 def seed_torch(seed=1029):
     random.seed(seed)
@@ -248,7 +249,14 @@ if __name__ == '__main__':
             )
             model.adjust_learning_rate()
 
-        #정확도 Train
+        if epoch % opt.val_epoch == 0 and epoch != 0:
+            model.eval()
+            
+            validate(model,opt)
+
+            model.train()
+
+
 
         #정확도 Val
         
