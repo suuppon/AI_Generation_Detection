@@ -28,7 +28,6 @@ class MultiTowerFromCloned(nn.Module):
 
     def __init__(self,
                  base_model: nn.Module,
-                 n_towers: int = 3,
                  num_classes: Optional[int] = 1,     # binary 가정
                  tower_device_map: Optional[Dict[str, torch.device]] = None,
                  tower_devices: Optional[List[torch.device]] = None,
@@ -41,19 +40,16 @@ class MultiTowerFromCloned(nn.Module):
                  fusion_use_gate: bool = True,
                  fusion_pool: str = "attn"):
         super().__init__()
-        assert n_towers >= 1, "n_towers must be >= 1"
         self.topk = int(topk)
         self.main_device = main_device or next(base_model.parameters()).device
 
         # 타워 이름
-        tower_names = ["edge", "texture", "other"]
-        
-        assert len(tower_names) == n_towers and len(set(tower_names)) == len(tower_names)
+        tower_names = ["edge", "texture", "other", "temporal"]
         self.tower_names: List[str] = tower_names
         self._name_to_idx = {name: i for i, name in enumerate(self.tower_names)}
 
         # clone towers
-        self.towers = nn.ModuleList([copy.deepcopy(base_model) for _ in range(n_towers)])
+        self.towers = nn.ModuleList([copy.deepcopy(base_model) for _ in range(4)])
         self.num_classes: Optional[int] = num_classes
 
         # 디바이스 배치
@@ -77,7 +73,6 @@ class MultiTowerFromCloned(nn.Module):
         # ★ Fusion Head 내장
         self.fusion_head = TopKWeightedTowerFusion(
             embed_dim=embed_dim,
-            n_towers=n_towers,
             hidden=fusion_hidden,
             dropout=fusion_dropout,
             use_gate=fusion_use_gate,
@@ -92,12 +87,20 @@ class MultiTowerFromCloned(nn.Module):
         return out_bt.view(B, F).to(self.main_device, non_blocking=True)
 
     def _logits_and_embeddings_one(self, x_bfchw: Tensor, tower: nn.Module) -> Tuple[Tensor, Tensor]:
-        B, F, C, H, W = x_bfchw.shape
+        if len(x_bfchw.shape) == 5:
+            B, F, C, H, W = x_bfchw.shape 
+        elif len(x_bfchw.shape) == 6:
+            B, F, num_frames, C, H, W = x_bfchw.shape
         dev = next(tower.parameters()).device
-        x_bt = x_bfchw.view(B * F, C, H, W).to(dev, non_blocking=True)
-        logits_bf = tower(x_bt).view(B, F).to(self.main_device, non_blocking=True)  # (B,F)
-        embeds_be = tower.get_embedding(x_bt)                                       # (B*F,E)
-        embeds_bfe = embeds_be.view(B, F, -1).to(self.main_device, non_blocking=True)  # (B,F,E)
+        x_bt = x_bfchw.view(-1, C, H, W).to(dev, non_blocking=True)
+        if len(x_bfchw.shape) == 5:
+            logits_bf = tower(x_bt).view(B, F).to(self.main_device, non_blocking=True)  # (B,F)
+            embeds_be = tower.get_embedding(x_bt)                                       # (B*F,E)
+            embeds_bfe = embeds_be.view(B, F, -1).to(self.main_device, non_blocking=True)  # (B,F,E)
+        elif len(x_bfchw.shape) == 6:
+            logits_bf = tower(x_bt).view(B, F, num_frames).to(self.main_device, non_blocking=True)
+            embeds_be = tower.get_embedding(x_bt)
+            embeds_bfe = embeds_be.view(B, F, num_frames, -1).to(self.main_device, non_blocking=True)
         return logits_bf, embeds_bfe
 
     def _build_fusion_inputs(self, inputs: List[Tensor], k: int) -> Tuple[Tensor, Tensor]:
@@ -108,8 +111,9 @@ class MultiTowerFromCloned(nn.Module):
         clip_embeds, tower_scores = [], []
         for x_bfchw, tower, tower_name in zip(inputs, self.towers, self.tower_names):
             logits_bf, embeds_bfe = self._logits_and_embeddings_one(x_bfchw, tower)
-            # if tower_name == temporal:
-            #     log
+            if tower_name == 'temporal':
+                # TODO
+                continue
             probs_bf = torch.sigmoid(logits_bf)
             kk = max(1, min(k, probs_bf.size(1)))
             topk_vals, topk_idx = torch.topk(probs_bf, k=kk, dim=1)         # (B,k)

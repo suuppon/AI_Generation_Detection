@@ -43,7 +43,6 @@ class Trainer(BaseModel):
 
         self.model = MultiTowerFromCloned(
             base_model=base_model,
-            n_towers=self.num_towers,
             num_classes=1,
             tower_devices=devices,
             main_device=main_device,
