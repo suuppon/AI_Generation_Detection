@@ -213,7 +213,7 @@ class Trainer(BaseModel):
             clip_embeds.append(ce)   # (B,E)
             tower_scores.append(sc)  # (B,)
 
-        emb_bte = torch.stack(clip_embeds, dim=1)    # (B,T,E)
+        emb_bte = torch.stack(clip_embeds, dim=1)    # (B,T,H)
         scores_bt = torch.stack(tower_scores, dim=1) # (B,T)
         return emb_bte, scores_bt
 
@@ -389,12 +389,12 @@ class Trainer(BaseModel):
     # 평가/추론용 API (Fusion 경로)
     # ---------------------
     @torch.no_grad()
-    def predict_clip_fusion(self, inputs: List[torch.Tensor]):
+    def predict_clip_fusion(self):
         """
         Fusion 경로로 clip 확률과 타워 스코어를 반환
+        
         """
         self.model.eval()
-        self.inputs = [v.to(self.device, non_blocking=True) for v in inputs]
         emb_bte, scores_bt = self._build_fusion_inputs()
         logit_b = self.fusion_head(emb_bte, scores_bt)      # (B,)
         prob_b = torch.sigmoid(logit_b)

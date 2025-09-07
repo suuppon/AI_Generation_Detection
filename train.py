@@ -150,7 +150,7 @@ from data import create_dataloader
 from utils.trainer import Trainer
 from options.train_options import TrainOptions
 from util import Logger
-import validate
+from validate import validate
 
 def seed_torch(seed=1029):
     random.seed(seed)
@@ -251,9 +251,9 @@ if __name__ == '__main__':
 
         if epoch % opt.val_epoch == 0 and epoch != 0:
             model.eval()
-            
-            validate(model,opt)
 
+            cc, ap, r_acc, f_acc, y_true, y_pred = validate(model ,opt)
+            
             model.train()
 
 

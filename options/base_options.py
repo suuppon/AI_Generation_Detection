@@ -14,7 +14,7 @@ class BaseOptions():
     def initialize(self, parser):
         parser.add_argument('--mode', default='binary')
         parser.add_argument('--arch', type=str, default='res50', help='architecture for binary classification')
-
+        
         # data augmentation
         parser.add_argument('--rz_interp', default='bilinear')
         parser.add_argument('--blur_prob', type=float, default=0)
