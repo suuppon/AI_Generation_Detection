@@ -83,8 +83,6 @@ class Trainer(BaseModel):
         print("*"*25); print(f"Changing lr to {self.lr:.6g}"); print("*"*25)
         return True
 
-<<<<<<< HEAD
-=======
     # ---------------------
     # 프레임별 로짓, 임베딩
     # ---------------------
@@ -157,7 +155,6 @@ class Trainer(BaseModel):
     # ---------------------
     # 입력 주입
     # ---------------------
->>>>>>> origin/jwchoi
     def set_input(self, input):
         xs, y = input
         if isinstance(xs, dict):
@@ -196,13 +193,6 @@ class Trainer(BaseModel):
         return prob_b, hard_b
 
     @torch.no_grad()
-<<<<<<< HEAD
-    def predict_clip_fusion(self, inputs: List[torch.Tensor]):
-        self.model.eval()
-        aux = self.model(inputs, return_aux=True)
-        prob_b = torch.sigmoid(aux["logit_b"])
-        return prob_b, aux["scores_bt"]
-=======
     def predict_clip_fusion(self):
         """
         Fusion 경로로 clip 확률과 타워 스코어를 반환
@@ -227,4 +217,3 @@ class Trainer(BaseModel):
             return self.model(x_bchw.to(self.device))  # (B,1)
         else:
             return tower_modules[0](x_bchw.to(self.device))  # (B,1)
->>>>>>> origin/jwchoi
