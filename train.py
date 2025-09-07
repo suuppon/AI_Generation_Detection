@@ -11,8 +11,6 @@ from options.train_options import TrainOptions
 from util import Logger
 from validate import validate
 
-
-
 def seed_torch(seed: int = 1029):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)

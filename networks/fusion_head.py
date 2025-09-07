@@ -48,8 +48,9 @@ class TopKWeightedTowerFusion(nn.Module):
         """
         emb_bte: (B,T,E), tower_scores_bt: (B,T) or None
         """
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         B, T, E = emb_bte.shape
-
+        emb_bte = emb_bte.to(device=device)
         x = self.proj(emb_bte)    # (B,T,H)
         x = self.norm(x)
         x = self.act(self.drop(x))  # (B,T,H)
@@ -59,8 +60,10 @@ class TopKWeightedTowerFusion(nn.Module):
             x = self.attn_ln(x + x2)
 
         if self.use_gate and (tower_scores_bt is not None):
-            gate = torch.softmax(tower_scores_bt, dim=1).unsqueeze(-1)  # (B,T,1)
+            gate = torch.softmax(tower_scores_bt, dim=1).unsqueeze(-1) 
+            gate = gate.to(device) # (B,T,1)
             x = (x * gate).sum(dim=1)  # (B,H)
+        
         else:
             if self.pool in ("attn", "mean"):
                 x = x.mean(dim=1)      # (B,H)

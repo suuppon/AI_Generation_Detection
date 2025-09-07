@@ -84,6 +84,8 @@ class MultiTowerFromCloned(nn.Module):
             pool=fusion_pool,
         ).to(self.main_device)
 
+        
+
     # ---- 내부 헬퍼 ----
     def _forward_frames_one(self, x_bfchw: Tensor, tower: nn.Module) -> Tensor:
         B, F, C, H, W = x_bfchw.shape
