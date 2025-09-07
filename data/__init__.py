@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 from torch.utils.data.sampler import WeightedRandomSampler
+import pickle
 
 from .datasets import (
     ProcessorBuilder,
@@ -25,13 +26,18 @@ def _pick_names(classes):
         f"Expected 'real' & 'fake' (or '0_real' & '1_fake') under dataroot, but found: {sorted(list(classes))}"
     )
 
-def get_dataset(opt):
+def get_dataset(opt,mode):
     """
     dataroot/
       real/ vid*/frame.png ...
       fake/ vid*/frame.png ...
     """
-    classes = os.listdir(opt.dataroot)
+    if mode == "val":
+        dataroot = opt.val_dataroot
+    else:
+        dataroot = opt.dataroot
+
+    classes = os.listdir(dataroot)
     real_name, fake_name = _pick_names(classes)
 
     # Processor / 옵션 적용
@@ -76,8 +82,14 @@ def get_bal_sampler(dataset):
         replacement=True,
     )
 
-def create_dataloader(opt):
-    dataset = get_dataset(opt)
+def create_dataloader(opt,mode):
+    dataset = get_dataset(opt,mode)
+
+    with open("./dataset.pkl", "wb") as f:
+        pickle.dump(dataset, f)
+    with open("./dataset.pkl", "rb") as f:
+        dataset = pickle.load(f)
+
     shuffle = not getattr(opt, "serial_batches", False) if (getattr(opt, "isTrain", True) and not getattr(opt, "class_bal", False)) else False
     sampler = get_bal_sampler(dataset) if getattr(opt, "class_bal", False) else None
     proc_mode = getattr(dataset, "_proc_mode", "dict")

@@ -7,25 +7,25 @@ from data import create_dataloader
 
 
 def validate(model, opt):
-    data_loader = create_dataloader(opt)
+
+    data_loader = create_dataloader(opt,"val")
+    model.eval()
 
     with torch.no_grad():
         y_true, y_pred = [], []
-        for data in data_loader:
-            model.set_input(data)
-            out = model.predict_clip_fusion()
-            #y_pred.extend(model(in_tens).sigmoid().flatten().tolist())
-            #y_true.extend(label.flatten().tolist())
-            print(f"Total score : {out[0]}, Tower score : {out[1]}")
-            y_pred = y_pred + out[0]
+        for data,label in data_loader:
+            out = model.forward(data)
+            out = torch.sigmoid(out)
+            y_pred.append(out.cpu())
+            y_true.append(label)
 
-    y_true = model.label
     
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     r_acc = accuracy_score(y_true[y_true==0], y_pred[y_true==0] > 0.5)
     f_acc = accuracy_score(y_true[y_true==1], y_pred[y_true==1] > 0.5)
     acc = accuracy_score(y_true, y_pred > 0.5)
     ap = average_precision_score(y_true, y_pred)
+    
     return acc, ap, r_acc, f_acc, y_true, y_pred
 
 

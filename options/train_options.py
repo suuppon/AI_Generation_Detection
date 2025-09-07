@@ -20,7 +20,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--beta1', type=float, default=0.9, help='momentum term of adam')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
         parser.add_argument('--val_epoch', type=float, default=2, help='몇 번째 에폭마다 val 저장할거냐')
-        parser.add_argument('--val_dataroot', type=str, default="./samples", help='val 데이터 루트')
+        parser.add_argument('--val_dataroot', type=str, default="./project/jskim/samples", help='val 데이터 루트')
         # parser.add_argument('--model_path')
         # parser.add_argument('--no_resize', action='store_true')
         # parser.add_argument('--no_crop', action='store_true')

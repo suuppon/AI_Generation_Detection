@@ -12,6 +12,7 @@ from util import Logger
 from validate import validate
 
 
+
 def seed_torch(seed: int = 1029):
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
@@ -41,7 +42,8 @@ def main():
     print(f"[INFO] fusion=ON (built-in at MultiTower), features={opt.features}")
 
     # ===== DataLoader =====
-    data_loader = create_dataloader(opt)
+    data_loader = create_dataloader(opt,"train")
+
 
     # ===== SummaryWriter =====
     tb_dir = os.path.join(opt.checkpoints_dir, opt.name, "train")
@@ -50,6 +52,7 @@ def main():
 
     # ===== Model =====
     model = Trainer(opt)
+
     model.train()
     print(f"cwd: {os.getcwd()}")
 
@@ -75,7 +78,7 @@ def main():
             model.optimize_parameters()
 
             # 통계/표시
-            loss_val = float(model.loss)
+            loss_val = float(model.loss.detach())
             running_loss += loss_val
             num_steps += 1
             lr_now = model.optimizer.param_groups[0]["lr"]
@@ -107,17 +110,17 @@ def main():
             )
             model.adjust_learning_rate()
 
-        # if epoch % opt.val_epoch == 0 and epoch != 0:
-        #     model.eval()
+        if epoch % opt.val_epoch == 0 and epoch != 0:
 
-        #     cc, ap, r_acc, f_acc, y_true, y_pred = validate(model ,opt)
-            
-        #     model.train()
+            acc, ap, r_acc, f_acc, y_true, y_pred = validate(model.model ,opt)
+            print(f"Acc : {acc}")
+            print(f"Average_precision : {ap}")
+            print(f"Real Acc : {r_acc}")
+            print(f"Fake Acc : {f_acc}")
 
-
+            model.model.train()
 
     # 마지막 저장
-    model.eval()
     model.save_networks("last")
     print("[DONE] training finished.")
 
