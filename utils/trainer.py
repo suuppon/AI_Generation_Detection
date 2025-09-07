@@ -9,7 +9,8 @@ from networks.resnet import resnet50
 from networks.base_model import BaseModel
 from networks.multi_tower import MultiTowerFromCloned, _parse_devices
 from networks.loss import ClipLevelLoss
-
+from networks.fusion_head import TopKWeightedTowerFusion
+from networks.resnet import ResNet
 
 class Trainer(BaseModel):
 
@@ -29,6 +30,10 @@ class Trainer(BaseModel):
         self.topk: int = int(getattr(opt, "topk", max(1, self.frames_per_clip // 3)))
         self.frame_reduce: str = getattr(opt, "tower_reduce", "lsep")  # "lsep" or "mean"
         self.tower_combine: str = getattr(opt, "tower_combine", "mean")  # "mean" or "sum"
+        self.use_fusion: bool = bool(getattr(opt, "use_fusion", True))
+        self.embedding_dim: int = int(getattr(opt, "embeddin_dim", 512))
+        self.fusion_hidden: int = int(getattr(opt, "fusion_hidden", 512))
+        self.fusion_dropout: float = float(getattr(opt, "fusion_dropout", 0.1))
 
         # focal / class imbalance
         self.use_focal: bool = (getattr(opt, "use_focal", "none") == "sigmoid_focal")
@@ -65,6 +70,22 @@ class Trainer(BaseModel):
             self.model = base_model
 
         self.model.to(self.device)
+        
+        if self.use_fusion:
+            self.fusion_head = TopKWeightedTowerFusion(
+                embed_dim=self.embedding_dim,
+                n_towers=self.num_towers,
+                hidden=self.fusion_hidden,
+                dropout=self.fusion_dropout,
+                use_gate=True,
+                pool="attn",
+            ).to(self.device)
+            
+            pos_w = None if (self.bce_pos_weight is None) else torch.tensor(self.bce_pos_weight, device=self.device)
+            self.fusion_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w)
+            
+            if self.isTrain:
+                self.optimizer.add_param_group({"params": self.fusion_head.parameters()})
 
         # 4) 손실함수 (클립 레벨)
         self.loss_fn = ClipLevelLoss(
@@ -121,6 +142,81 @@ class Trainer(BaseModel):
         return True
 
     # ---------------------
+    # 프레임별 로짓, 임베딩
+    # ---------------------
+    def _tower_logits_and_embeddings(self, x_bfchw: torch.Tensor, tower_module: ResNet):
+        B, F, C, H, W = x_bfchw.shape
+        x_bt = x_bfchw.view(B*F, C, H, W)
+        
+        tdev = next(tower_module.parameters()).device
+        x_bt = x_bt.to(tdev, non_blocking=True)
+        
+        # 1) 프레임 로짓
+        out_bt = tower_module(x_bt)
+        logits_bf = out_bt.view(B, F).to(self.device, non_blocking=True)
+        
+        embeds_be = tower_module.get_embedding(x_bt)
+        embeds_bfe = embeds_be.view(B, F, -1).to(self.device, non_blocking=True)
+        
+        return logits_bf, embeds_bfe
+    
+    # ---------------------
+    # Top-k weighted sum
+    # ---------------------
+    def _tower_topk_weighted_embed(self, x_bfchw: torch.Tensor, tower: nn.Module, k: int):
+        logits_bf, embeds_bfe = self._tower_logits_and_embeddings(x_bfchw, tower)
+        
+        probs_bf = torch.sigmoid(logits_bf)
+        k = max(1, min(k, probs_bf.size(1)))
+        topk_vals, topk_idx = torch.topk(probs_bf, k=k, dim=1)
+        
+        w = torch.softmax(topk_vals, dim=1).unsqueeze(-1)
+        
+        idx = topk_idx.unsqueeze(-1).expand(-1, -1, embeds_bfe.size(-1))
+        topk_embeds = torch.gater(embeds_bfe, dim=1, index=idx)
+        
+        clip_embed_be = (topk_embeds * w).sum(dim=1)
+        
+        tower_score_b = topk_vals.mean(dim=1)
+        
+        return clip_embed_be, tower_score_b
+    
+
+    def _build_fusion_inputs(self):
+        tower_modules = getattr(self.model, "towers", None)
+        if tower_modules is None:
+            tower_modules = [self.model]
+            assert len(self.inputs) == 1, "단일 타워인데 inputs 길이가 1이 아닙니다."
+
+        F_seq = self.inputs[0].size(1)
+        k = max(1, min(self.topk, F_seq))
+
+        clip_embeds = []
+        tower_scores = []
+        for x_bfchw, tower in zip(self.inputs, tower_modules):
+            ce, sc = self._tower_topk_weighted_embed(x_bfchw, tower, k)
+            clip_embeds.append(ce)     # (B,E)
+            tower_scores.append(sc)    # (B,)
+
+        emb_bte = torch.stack(clip_embeds, dim=1)   # (B,T,E)
+        scores_bt = torch.stack(tower_scores, dim=1) # (B,T)
+        return emb_bte, scores_bt
+
+    def forward_scores_only(self):
+        """
+        네가 말한 방식: seq_len에서 Top-K 뽑아 score 만들고,
+        그 score로 get_embedding 결과를 가중합 → [B,T,E] → Fusion NN → 최종 로짓
+        """
+        assert self.use_fusion, "use_fusion=False 상태입니다."
+        emb_bte, scores_bt = self._build_fusion_inputs()
+        fusion_logit_b = self.fusion_head(emb_bte, scores_bt)       # (B,)
+
+        # 출력/손실 세팅
+        self.output = fusion_logit_b.unsqueeze(1)                   # (B,1)
+        loss = self.fusion_criterion(fusion_logit_b, self.label)
+        self._loss_dict = {"loss": loss, "aux": {"tower_scores": scores_bt.detach(), "emb_bte_norm": emb_bte.norm(dim=-1).detach()}}
+        
+    # ---------------------
     # 입력 주입
     # ---------------------
     def set_input(self, input):
@@ -166,6 +262,9 @@ class Trainer(BaseModel):
           - 각 타워 t: (B,F,C,H,W) -> frame logits (B,F)
           - loss_fn이 Top-K 집계 + 타워 soft 결합 + BCE/Focal을 수행
         """
+        if self.use_fusion:
+            return self.forward_scores_only()
+        
         tower_modules = getattr(self.model, "towers", None)
         if tower_modules is None:
             # 단일 타워 (self.model 자체가 백본)
