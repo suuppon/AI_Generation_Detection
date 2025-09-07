@@ -42,7 +42,7 @@ class BaseOptions():
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{loadSize}')
         parser.add_argument('--delr_freq', type=int, default=20, help='frequency of changing lr')
         
-        parser.add_argument('--features', type=str, default='edge,texture',
+        parser.add_argument('--features', type=str, default='edge,texture,other',
                             help='comma-separated features to use: edge,texture,other')
         parser.add_argument('--proc_config', type=str, default='',
                             help='JSON path for FeatureManager configuration (optional)')

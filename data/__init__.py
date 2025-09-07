@@ -85,7 +85,7 @@ def create_dataloader(opt):
 
     return torch.utils.data.DataLoader(
         dataset,
-        batch_size=getattr(opt, "batch_size", 2),
+        batch_size=getattr(opt, "batch_size", 1),
         shuffle=shuffle if sampler is None else False,
         sampler=sampler,
         num_workers=int(getattr(opt, "num_threads", 4)),

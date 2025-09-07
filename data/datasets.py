@@ -119,7 +119,37 @@ class MultiProcVideoDataset(Dataset):
 
         if not self.index:
             raise RuntimeError("No videos found. Check paths.")
+        
+        #데이터 총 저장소 리스트
+        self.tank = []
 
+        ###데이터 전처리 
+        for vdir , label in self.index:
+
+            #데이터 프레임 정리 및 불러오기
+            frame_paths = self._sorted_frames(vdir)
+            if not frame_paths:
+                    raise RuntimeError("비디오에서 프레임을 찾을 수 없습니다.")
+            
+            #특징 맵 backbone 설정 및 전처리
+            features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
+
+            for fp in tqdm(frame_paths, desc=f"Processing {vdir}"):
+                    processed = self.processor.process_one(fp)
+                    for k, t in processed.items():
+                        features_map[k].append(t)
+
+            #유효성 검사
+            if any(len(v) == 0 for v in features_map.values()):
+                    raise RuntimeError("처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다.")
+            
+            # 모든 특징들을 텐서로 스택
+            for k in list(features_map.keys()):
+                features_map[k] = torch.stack(features_map[k], dim=0)
+
+            self.tank.append((features_map, label))
+  
+        
     def _index_class(self, class_dir: str, label: int):
         if not os.path.isdir(class_dir):
             return
@@ -156,31 +186,8 @@ class MultiProcVideoDataset(Dataset):
         # 유효한 샘플을 찾을 때까지 무한 루프
         while True:
             try:
-                vdir, label = self.index[idx]
-                frame_paths = self._sorted_frames(vdir)
-
-                if not frame_paths:
-                    raise RuntimeError("비디오에서 프레임을 찾을 수 없습니다.")
-
-                # 모든 프레임에 대해 다중 전처리 적용
-                features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
-
-                for fp in tqdm(frame_paths, desc=f"Processing {vdir}"):
-                    processed = self.processor.process_one(fp)
-                    for k, t in processed.items():
-                        features_map[k].append(t)
-                
-                # --- 프레임 처리 완료 후, 데이터 유효성 검사 ---
-                # 비어있는 features_map이 있는지 확인
-                if any(len(v) == 0 for v in features_map.values()):
-                    raise RuntimeError("처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다.")
-                
-                # 모든 특징들을 텐서로 스택
-                for k in list(features_map.keys()):
-                    features_map[k] = torch.stack(features_map[k], dim=0)
-
+                features_map, label = self.tank[idx]
                 return features_map, label
-                
             except Exception as e:
                 # 에러 발생 시 현재 인덱스 건너뛰고 새로운 인덱스 선택
                 print(f"인덱스 {idx} 비디오 처리 중 오류 발생: {e}. 새로운 샘플을 찾습니다.")
