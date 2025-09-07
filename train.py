@@ -107,21 +107,14 @@ def main():
             )
             model.adjust_learning_rate()
 
-<<<<<<< HEAD
-        # ===== (선택) 주기적 체크포인트 =====
-        save_every = getattr(opt, "save_epoch_freq", 0)
-        if save_every and ((epoch + 1) % save_every == 0):
-            model.save_networks(str(epoch + 1))
-=======
-        if epoch % opt.val_epoch == 0 and epoch != 0:
-            model.eval()
+        # if epoch % opt.val_epoch == 0 and epoch != 0:
+        #     model.eval()
 
-            cc, ap, r_acc, f_acc, y_true, y_pred = validate(model ,opt)
+        #     cc, ap, r_acc, f_acc, y_true, y_pred = validate(model ,opt)
             
-            model.train()
+        #     model.train()
 
 
->>>>>>> origin/jwchoi
 
     # 마지막 저장
     model.eval()

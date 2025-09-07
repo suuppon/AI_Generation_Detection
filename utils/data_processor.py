@@ -3,7 +3,7 @@ import cv2 as cv
 import numpy as np
 import torch
 from torchvision import transforms
-from typing import Union, Tuple, Optional, List
+from typing import Union, Tuple, Optional, List, Dict
 from abc import ABC, abstractmethod
 
 # OpenCV 전역 최적화
@@ -386,25 +386,197 @@ class TexturePreprocessor(BasePreprocessor):
         pil_image = Image.fromarray(result)
         return self.torch_transform(pil_image)
 
+class TemporalWindowPreprocessor(BasePreprocessor):
+    """
+    입력 형태에 따라 자동 동작하는 시퀀스 전처리기.
+      - List[str] (프레임 경로 리스트)          -> [Seq_len, Frames_per_step, C, H, W]
+      - List[np.ndarray | torch.Tensor]        -> [Seq_len, Frames_per_step, C, H, W]
+      - 단일 프레임(str/ndarray/tensor)        -> [1,      Frames_per_step, C, H, W]
+    pad:
+      - 'edge' : 경계를 가장 가까운 프레임으로 복제
+      - 'zero' : 0으로 패딩
+    """
 
-# 사용 예제
-if __name__ == "__main__":
-    # Edge 전처리기 생성
-    edge_preprocessor = EdgePreprocessor(
-        target_size=(224, 224),
-        edge_method='canny',
-        edge_weight=0.4,
-        edge_enhancement=True
-    )
+    def __init__(
+        self,
+        target_size: Tuple[int, int] = (224, 224),
+        frames_per_step: int = 3,
+        stride: int = 1,
+        pad: str = "edge",     # 'edge' | 'zero'
+        normalize: bool = True
+    ):
+        super().__init__(target_size, normalize)
+        assert frames_per_step >= 1 and frames_per_step % 2 == 1, \
+            "frames_per_step는 1 이상의 홀수여야 합니다. (예: 3,5,7)"
+        self.frames_per_step = int(frames_per_step)
+        self.stride = max(1, int(stride))
+        self.pad = pad
 
-    # 이미지 전처리 테스트
-    try:
-        edge_tensor = edge_preprocessor.preprocess("cat_img.png")
-        print(f"Edge tensor shape: {tuple(edge_tensor.shape)}")
-        print(f"Edge tensor range: {edge_tensor.min():.3f} ~ {edge_tensor.max():.3f}")
-    except Exception as e:
-        print(f"cat_img.png 로드 실패: {e}")
-        # 더미 이미지로 테스트
-        dummy_image = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
-        edge_tensor = edge_preprocessor.preprocess(dummy_image)
-        print(f"Edge tensor shape: {tuple(edge_tensor.shape)}")
+    # === 핵심: preprocess가 시퀀스를 통째로 만들어서 반환 ===
+    def preprocess(
+        self,
+        image: Union[
+            str, np.ndarray, torch.Tensor,
+            List[Union[str, np.ndarray, torch.Tensor]]
+        ]
+    ) -> torch.Tensor:
+        """
+        리스트가 오면 시퀀스로 간주하여 [Seq_len, F, C, H, W] 반환.
+        단일 프레임이면 그 프레임을 중심으로 한 1-step 시퀀스 [1, F, C, H, W] 반환.
+        """
+        if isinstance(image, (list, tuple)):
+            if len(image) == 0:
+                raise ValueError("Empty sequence passed to TemporalWindowPreprocessor.preprocess()")
+            if isinstance(image[0], str):
+                return self._preprocess_paths(list(image))
+            else:
+                return self._preprocess_frames(list(image))
+        # 단일 프레임
+        return self._preprocess_frames([image])
+
+    # === 배치 지원: 항목별 시퀀스를 제로패딩으로 맞춰 [B, S_max, F, C, H, W] ===
+    def preprocess_batch(
+        self,
+        items: List[
+            Union[
+                str, np.ndarray, torch.Tensor,
+                List[Union[str, np.ndarray, torch.Tensor]]
+            ]
+        ]
+    ) -> torch.Tensor:
+        seq_list: List[torch.Tensor] = [self.preprocess(x) for x in items]  # 각자 [S_i,F,C,H,W]
+        S_max = max(t.shape[0] for t in seq_list)
+        B = len(seq_list)
+        F, C, H, W = seq_list[0].shape[1:]
+        out = seq_list[0].new_zeros((B, S_max, F, C, H, W))
+        for i, t in enumerate(seq_list):
+            S = t.shape[0]
+            out[i, :S] = t
+        return out
+
+    # === 내부 유틸 ===
+    def _load_rgb_uint8_from_path(self, path: str) -> np.ndarray:
+        img = cv.imread(path, cv.IMREAD_COLOR)
+        if img is None:
+            raise ValueError(f"Cannot read image: {path}")
+        return cv.cvtColor(img, cv.COLOR_BGR2RGB)
+
+    def _to_tensor(self, arr_or_tensor: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """RGB uint8 ndarray(혹은 tensor)를 [C,H,W]로 변환하고 Resize/Normalize."""
+        from PIL import Image
+        if torch.is_tensor(arr_or_tensor):
+            x = arr_or_tensor.detach().cpu()
+            if x.ndim == 3 and x.shape[0] in (1, 3):        # CHW
+                chw = x
+            elif x.ndim == 3 and x.shape[2] in (1, 3):      # HWC
+                chw = x.permute(2, 0, 1)
+            else:
+                raise ValueError(f"Unsupported tensor shape: {tuple(x.shape)}")
+
+            if chw.dtype != torch.uint8:
+                y = chw
+                y = (y * 255.0).clamp(0, 255) if y.max() <= 1.0 else y.clamp(0, 255)
+                y = y.to(torch.uint8)
+                hwc = y.permute(1, 2, 0).numpy()
+                return self.torch_transform(Image.fromarray(hwc))
+            else:
+                hwc = chw.permute(1, 2, 0).numpy()
+                return self.torch_transform(Image.fromarray(hwc))
+
+        # ndarray
+        arr = np.asarray(arr_or_tensor)
+        if arr.ndim == 2:  # grayscale → RGB
+            arr = np.repeat(arr[..., None], 3, axis=2)
+        elif arr.ndim == 3 and arr.shape[2] == 3:
+            pass
+        else:
+            raise ValueError(f"Unsupported ndarray shape: {arr.shape}")
+        return self.torch_transform(Image.fromarray(_ensure_uint8(_to_rgb_np(arr))))
+
+    def _get_index(self, i: int, n: int) -> int:
+        if 0 <= i < n:
+            return i
+        if self.pad == "edge":
+            return max(0, min(i, n - 1))
+        return -1  # zero pad
+
+    # === 경로 리스트 → 시퀀스 ===
+    def _preprocess_paths(self, frame_paths: List[str]) -> torch.Tensor:
+        """
+        frame_paths: 정렬된 경로 리스트
+        return: [Seq_len, Frames_per_step, C, H, W]
+        """
+        from PIL import Image
+        n = len(frame_paths)
+        half = self.frames_per_step // 2
+        seq_list: List[torch.Tensor] = []
+        cache: Dict[int, torch.Tensor] = {}
+
+        def load_as_tensor(idx: int) -> torch.Tensor:
+            if idx in cache:
+                return cache[idx]
+            if idx < 0 or idx >= n:
+                if self.pad == "zero":
+                    t0 = next(iter(cache.values())) if cache else self.torch_transform(
+                        Image.fromarray(self._load_rgb_uint8_from_path(frame_paths[0]))
+                    )
+                    return torch.zeros_like(t0)
+            arr = self._load_rgb_uint8_from_path(frame_paths[idx])
+            t = self.torch_transform(Image.fromarray(arr))  # [C,H,W]
+            cache[idx] = t
+            return t
+
+        i = 0
+        while i < n:
+            window: List[torch.Tensor] = []
+            for off in range(-half, half + 1):
+                j = i + off
+                jj = self._get_index(j, n)
+                if jj == -1:  # zero pad
+                    t = load_as_tensor(0)
+                    window.append(torch.zeros_like(t))
+                else:
+                    window.append(load_as_tensor(jj))
+            seq_list.append(torch.stack(window, dim=0))  # [F,C,H,W]
+            i += self.stride
+
+        return torch.stack(seq_list, dim=0)  # [Seq_len,F,C,H,W]
+
+    # === ndarray/tensor 리스트 → 시퀀스 ===
+    def _preprocess_frames(self, frames: List[Union[np.ndarray, torch.Tensor]]) -> torch.Tensor:
+        """
+        frames: ndarray/tensor 리스트 (정렬된 순서)
+        return: [Seq_len, Frames_per_step, C, H, W]
+        """
+        n = len(frames)
+        half = self.frames_per_step // 2
+
+        cache: Dict[int, torch.Tensor] = {}
+
+        def get_tensor(idx: int) -> torch.Tensor:
+            if idx in cache:
+                return cache[idx]
+            t = self._to_tensor(frames[idx])  # [C,H,W]
+            cache[idx] = t
+            return t
+
+        template = get_tensor(0)
+        seq_list: List[torch.Tensor] = []
+
+        i = 0
+        while i < n:
+            window: List[torch.Tensor] = []
+            for off in range(-half, half + 1):
+                j = i + off
+                if 0 <= j < n:
+                    window.append(get_tensor(j))
+                else:
+                    if self.pad == "edge":
+                        jj = 0 if j < 0 else n - 1
+                        window.append(get_tensor(jj))
+                    else:
+                        window.append(torch.zeros_like(template))
+            seq_list.append(torch.stack(window, dim=0))  # [F,C,H,W]
+            i += self.stride
+
+        return torch.stack(seq_list, dim=0)  # [Seq_len,F,C,H,W]

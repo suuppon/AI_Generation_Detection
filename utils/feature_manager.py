@@ -1,13 +1,19 @@
 # feature_manager.py
 import os
 import json
-from typing import Dict, Any, Union, List
+from typing import Dict, Any, Union, List, Optional
 import torch
 import numpy as np
 from PIL import Image
 import cv2
 
-from utils import TexturePreprocessor, EdgePreprocessor, OtherPreprocessor
+# utils.data_processor 안에 있는 전처리기들 사용
+from utils.data_processor import (
+    TexturePreprocessor,
+    EdgePreprocessor,
+    OtherPreprocessor,
+    TemporalWindowPreprocessor,  # ★ 경로 리스트를 입력받아 내부에서 앞/뒤 프레임을 직접 로드
+)
 
 ImageLike = Union[str, np.ndarray, torch.Tensor]
 
@@ -30,15 +36,15 @@ def _load_image_any(image: Union[str, np.ndarray, torch.Tensor]) -> np.ndarray:
         return image
     elif torch.is_tensor(image):
         arr = image.detach().cpu().numpy()
-        # 채널/타입은 호출부에서 맞춘다고 가정
         return arr
     else:
         raise TypeError(f"Unsupported image type: {type(image)}")
 
+
 class FeatureManager:
     """Feature 전처리 통합 관리자"""
 
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: Optional[str] = None):
         self.preprocessors: Dict[str, Any] = {}
         self.config = self._load_config(config_path) if config_path else {}
         self._initialize_preprocessors()
@@ -51,6 +57,7 @@ class FeatureManager:
 
     def _initialize_preprocessors(self):
         default_config = {
+            # ----- spatial features -----
             'texture': {
                 'target_size': (224, 224),
                 'gabor_angles': [0, 45, 90, 135],
@@ -66,7 +73,9 @@ class FeatureManager:
                 'target_size': (224, 224),
                 'canny_low': 50,
                 'canny_high': 150,
-                'edge_method': 'canny',
+                'sobel_kernel': 3,
+                'laplacian_kernel': 3,
+                'edge_method': 'canny',   # 'canny' | 'sobel' | 'laplacian'
                 'edge_weight': 0.4,
                 'edge_enhancement': False,
                 'normalize': True
@@ -77,15 +86,32 @@ class FeatureManager:
                 'contrast_enhancement': True,
                 'noise_reduction': False,
                 'blur': False,
+                'blur_kernel': 3,
+                'brightness_adjustment': 0.0,
+                'noise_factor': 0.0,
+                'normalize': True
+            },
+            # ----- temporal (sequence) -----
+            'temporal': {
+                'target_size': (224, 224),
+                'frames_per_step': 3,  # 예: [t-1, t, t+1]
+                'stride': 1,
+                'pad': 'edge',         # 'edge' | 'zero'
                 'normalize': True
             }
         }
-        cfg = {**default_config, **self.config}
-        self.preprocessors['texture'] = TexturePreprocessor(**cfg['texture'])
-        self.preprocessors['edge']    = EdgePreprocessor(**cfg['edge'])
-        self.preprocessors['other']   = OtherPreprocessor(**cfg['other'])
 
-    # -------- 단일 feature (개별 호출 시엔 각각 1회 로드됨) --------
+        cfg = {**default_config, **self.config}
+
+        # 개별 전처리기 초기화
+        self.preprocessors['texture']  = TexturePreprocessor(**cfg['texture'])
+        self.preprocessors['edge']     = EdgePreprocessor(**cfg['edge'])
+        self.preprocessors['other']    = OtherPreprocessor(**cfg['other'])
+        self.preprocessors['temporal'] = TemporalWindowPreprocessor(**cfg['temporal'])  # ★
+
+    # -----------------------------
+    # 단일 프레임용 (spatial features)
+    # -----------------------------
     def preprocess_texture(self, image: ImageLike) -> torch.Tensor:
         arr = _load_image_any(image)
         return self.preprocessors['texture'].preprocess(arr)
@@ -98,11 +124,13 @@ class FeatureManager:
         arr = _load_image_any(image)
         return self.preprocessors['other'].preprocess(arr)
 
-    # -------- 여러 feature를 한 번에: 이미지 1회 로드 공유(핵심) --------
     def preprocess_selected(self, image: ImageLike, features: List[str]) -> Dict[str, torch.Tensor]:
         """
-        지정된 features만 처리. 디스크/메모리 로드는 단 1회.
+        지정된 spatial features만 처리. 디스크/메모리 로드는 1회.
+        ※ temporal은 시퀀스 전용이므로 여기서 다루지 않는다.
         """
+        if 'temporal' in features:
+            raise ValueError("Use 'preprocess_temporal_paths' for temporal features (sequence from paths).")
         arr = _load_image_any(image)
         out: Dict[str, torch.Tensor] = {}
         for k in features:
@@ -112,26 +140,68 @@ class FeatureManager:
         return out
 
     def preprocess_all(self, image: ImageLike) -> Dict[str, torch.Tensor]:
-        """texture/edge/other 전부를 1회 로드로 처리"""
+        """texture/edge/other 전부를 1회 로드로 처리 (temporal 제외)"""
         return self.preprocess_selected(image, ['texture', 'edge', 'other'])
 
-    def preprocess_batch_all(self, images: List[ImageLike]) -> Dict[str, torch.Tensor]:
+    # -----------------------------
+    # 시퀀스(프레임 경로 리스트) 전용
+    # -----------------------------
+    def preprocess_temporal_paths(self, frame_paths: List[str]) -> torch.Tensor:
         """
-        배치 처리. 각 이미지당 1회 로드 + 3 feature 계산 후 stack.
-        실질 병목은 여기의 전처리 연산이므로 DataLoader의 num_workers/prefetch로 병렬화 권장.
+        프레임 '경로 리스트'를 받아 (Seq_len, Frames_per_step, C, H, W)를 반환.
+        내부에서 앞/뒤 프레임까지 직접 로드하여 윈도우 구성.
         """
-        results = {'texture': [], 'edge': [], 'other': []}
-        for image in images:
-            processed = self.preprocess_all(image)  # <-- 여기서도 각 이미지 1회 로드
-            for k, t in processed.items():
-                results[k].append(t)
-        return {
-            'texture': torch.stack(results['texture']),
-            'edge':    torch.stack(results['edge']),
-            'other':   torch.stack(results['other']),
-        }
+        proc: TemporalWindowPreprocessor = self.preprocessors['temporal']
+        return proc.preprocess_paths(frame_paths)
 
-    def get_preprocessor(self, feature_type: str):
-        if feature_type not in self.preprocessors:
-            raise ValueError(f"Unknown feature type: {feature_type}")
-        return self.preprocessors[feature_type]
+    def preprocess_sequence_selected_paths(self, frame_paths: List[str], features: List[str]) -> Dict[str, torch.Tensor]:
+        """
+        시퀀스 입력에서 선택된 feature 처리.
+        - 'temporal' → [Seq_len, F, C, H, W]
+        - 나머지 spatial features → 모든 프레임을 독립 처리 후 [T, C, H, W]
+        """
+        out: Dict[str, torch.Tensor] = {}
+        want_temporal = 'temporal' in features
+
+        # temporal 먼저
+        if want_temporal:
+            out['temporal'] = self.preprocess_temporal_paths(frame_paths)
+
+        # spatial들
+        spatial = [k for k in features if k != 'temporal']
+        if spatial:
+            # 경로 리스트를 한 장씩 읽어 처리
+            tensors_by_key: Dict[str, List[torch.Tensor]] = {k: [] for k in spatial}
+            for p in frame_paths:
+                arr = _load_image_any(p)
+                for k in spatial:
+                    proc = self.preprocessors[k]
+                    tensors_by_key[k].append(proc.preprocess(arr))
+            for k in spatial:
+                out[k] = torch.stack(tensors_by_key[k], dim=0)  # [T, C, H, W]
+        return out
+
+    # -----------------------------
+    # 배치 시퀀스 처리 (옵션)
+    # -----------------------------
+    def preprocess_batch_sequences(
+        self,
+        sequences: List[List[str]],
+        features: List[str] = ('temporal',),
+    ) -> Dict[str, torch.Tensor]:
+        """
+        sequences: 각 항목이 프레임 경로 리스트인 리스트
+        반환:
+          - 'temporal' in features: [B, Seq, F, C, H, W]
+          - spatial features: [B, T, C, H, W]
+        """
+        bucket: Dict[str, List[torch.Tensor]] = {}
+        for paths in sequences:
+            out = self.preprocess_sequence_selected_paths(paths, list(features))
+            for k, v in out.items():
+                bucket.setdefault(k, []).append(v)
+
+        stacked: Dict[str, torch.Tensor] = {}
+        for k, vs in bucket.items():
+            stacked[k] = torch.stack(vs, dim=0)
+        return stacked
