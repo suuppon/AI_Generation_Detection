@@ -80,15 +80,21 @@ class MultiProcVideoDataset(Dataset):
         fake_dir: str,
         real_dir: Optional[str] = None,
         processor: Optional[ProcessorBuilder] = None,
-        mode: str = "concat",            # "concat" | "dict" | "sequence"
+        mode: str = "concat",                 # "concat" | "dict" | "sequence"
         max_videos_per_class: Optional[int] = None,
         sort_frames_numeric: bool = True,
         # 프레임 샘플링 옵션
-        frame_max: Optional[int] = None, # 비디오당 최대 프레임 수(None: 제한없음)
-        frame_stride: int = 1,           # N프레임 간격 샘플링(최소 1)
-        frame_start: int = 0,            # 시작 offset(최소 0)
+        frame_max: Optional[int] = None,      # 비디오당 최대 프레임 수(None: 제한없음)
+        frame_stride: int = 1,                # N프레임 간격 샘플링(최소 1)
+        frame_start: int = 0,                 # 시작 offset(최소 0)
         # 시퀀스에서 spatial도 함께 뽑고 싶을 때 지정 (예: ['temporal','edge'])
         sequence_features: Optional[List[str]] = None,
+        # dict 모드에서 temporal 키 포함 및 옵션
+        include_temporal_in_dict: bool = True,
+        temporal_channels: int = 3,           # temporal 채널 수 (1=grayscale, 3=RGB)
+        normalize_temporal: bool = False,     # True면 [0,1] 정규화
+        temporal_num_frames: int = 8,         # num_frames(F)
+        temporal_hop: int = 4,                # 윈도우 hop
     ):
         assert mode in ("concat", "dict", "sequence")
         self.fake_dir = fake_dir
@@ -102,10 +108,18 @@ class MultiProcVideoDataset(Dataset):
         self.frame_stride = max(1, frame_stride)
         self.frame_start = max(0, frame_start)
 
+        # 프로세서 & 시퀀스 피처
         self.processor = processor or ProcessorBuilder(config_path=None, features=None)
         self.sequence_features = sequence_features or ['temporal']
 
-        # (vdir, label)
+        # temporal 옵션
+        self.include_temporal_in_dict = include_temporal_in_dict
+        self.temporal_channels = temporal_channels
+        self.normalize_temporal = normalize_temporal
+        self.temporal_num_frames = max(1, temporal_num_frames)
+        self.temporal_hop = max(1, temporal_hop)
+
+        # (vdir, label) 인덱싱
         self.index: List[Tuple[str, int]] = []
         self._index_class(fake_dir, label=0)
         if real_dir is not None:
@@ -114,28 +128,29 @@ class MultiProcVideoDataset(Dataset):
         if not self.index:
             raise RuntimeError("No videos found. Check paths.")
 
-        # 미리 가공 데이터를 담아둘 저장소
+        # 미리 가공 저장
         self.tank: List[Tuple[Union[Dict[str, Tensor], Tensor], int]] = []
 
-        # 비디오 단위로 가공
+        # 비디오 단위 전처리
         for vdir, label in self.index:
             frame_paths = self._sorted_frames(vdir)
             if not frame_paths:
                 raise RuntimeError(f"비디오에서 프레임을 찾을 수 없습니다: {vdir}")
 
+            # --- sequence 모드: FeatureManager가 [S,F,C,H,W] 생성 ---
             if self.mode == "sequence":
-                # 경로 리스트를 그대로 넘겨서 내부에서 앞/뒤 로드 → 시퀀스 생성
-                out_dict = self.processor.process_sequence_from_paths(frame_paths, features=self.sequence_features)
-                # 최소 'temporal' 키는 있어야 함
+                out_dict = self.processor.process_sequence_from_paths(
+                    frame_paths, features=self.sequence_features
+                )
                 if 'temporal' not in out_dict:
                     raise RuntimeError("sequence mode requires 'temporal' output.")
                 self.tank.append((out_dict, label))
                 continue
 
-            # 기존 dict/concat 경로 (단일 프레임 반복)
+            # --- dict/concat 모드: 프레임별 spatial 피처 계산 ---
             features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
             for fp in tqdm(frame_paths, desc=f"Processing {vdir}"):
-                processed = self.processor.process_one(fp)
+                processed = self.processor.process_one(fp)  # {"edge": [C,H,W], ...}
                 for k, t in processed.items():
                     features_map[k].append(t)
 
@@ -143,18 +158,29 @@ class MultiProcVideoDataset(Dataset):
             if any(len(v) == 0 for v in features_map.values()):
                 raise RuntimeError(f"처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다: {vdir}")
 
-            # 모든 특징들을 텐서로 스택
+            # 스택: [T,C,H,W]
             for k in list(features_map.keys()):
-                features_map[k] = torch.stack(features_map[k], dim=0)  # [T,C,H,W]
+                features_map[k] = torch.stack(features_map[k], dim=0)
 
+            # --- dict 모드에서 temporal을 [S,F,C,H,W]로 추가 ---
+            if self.mode == "dict" and self.include_temporal_in_dict:
+                any_key = next(iter(features_map.keys()))
+                _, H, W = features_map[any_key].shape[1:]
+                temporal_stack = self._build_temporal_windows(
+                    frame_paths, (H, W),
+                    F=self.temporal_num_frames,
+                    hop=self.temporal_hop
+                )  # [S,F,C,H,W]
+                features_map['temporal'] = temporal_stack
+
+            # 저장
             if self.mode == "dict":
                 self.tank.append((features_map, label))
             else:  # "concat"
-                # C축으로 concat
                 keys = sorted(features_map.keys())
                 cat = torch.cat([features_map[k] for k in keys], dim=1)  # [T, sumC, H, W]
                 self.tank.append((cat, label))
-
+                
     def _index_class(self, class_dir: str, label: int):
         if not os.path.isdir(class_dir):
             return
@@ -170,6 +196,57 @@ class MultiProcVideoDataset(Dataset):
             except Exception:
                 # 권한/깨진 디렉토리 등 무시
                 continue
+
+    @torch.no_grad()
+    def _build_temporal_windows(self, frame_paths: List[str], target_hw: Tuple[int, int],
+                                F: int, hop: int) -> Tensor:
+        """
+        frame_paths → [S, F, C, H, W]
+        S = 1 + floor((T - F) / hop) (T < F이면 S=1로 패딩 없이 마지막 잘라내기 대신, F>T면 F=T로 다운셋)
+        """
+        H, W = target_hw
+        T = len(frame_paths)
+        if T == 0:
+            raise RuntimeError("No frames to build temporal windows.")
+
+        # 필요한 경우 F를 T로 축소 (짧은 비디오 대응)
+        F_eff = min(F, T)
+
+        # 모든 프레임 로드 (한 번만)
+        frames = []
+        for fp in frame_paths:
+            img = Image.open(fp).convert("RGB")
+            if img.size != (W, H):
+                img = img.resize((W, H), Image.BILINEAR)
+            arr = np.asarray(img)  # H,W,3
+            t = torch.from_numpy(arr).permute(2, 0, 1).float()  # [3,H,W]
+            if self.temporal_channels == 1:
+                y = (0.299 * t[0] + 0.587 * t[1] + 0.114 * t[2]).unsqueeze(0)
+                t = y
+            if self.normalize_temporal:
+                t = t / 255.0
+            frames.append(t)  # [C,H,W]
+        stack = torch.stack(frames, dim=0)  # [T,C,H,W]
+
+        # 윈도우 추출
+        if T <= F_eff:
+            windows = stack.unsqueeze(0)  # [1,T,C,H,W]
+            # 앞쪽으로 0-padding해서 길이를 F로 맞추기(원하면 유지도 가능)
+            if T < F:
+                pad = stack.new_zeros((F - T, *stack.shape[1:]))
+                windows = torch.cat([windows[:, :0], torch.cat([stack, pad], dim=0).unsqueeze(0)], dim=1)  # [1,F,C,H,W]
+            return windows  # [1,F,C,H,W] (또는 [1,T,C,H,W] if T==F)
+
+        starts = list(range(0, T - F_eff + 1, hop))
+        windows = []
+        for s in starts:
+            clip = stack[s:s+F_eff]  # [F_eff,C,H,W]
+            # F_eff < F이면 뒤쪽 0패딩
+            if F_eff < F:
+                pad = stack.new_zeros((F - F_eff, *stack.shape[1:]))
+                clip = torch.cat([clip, pad], dim=0)
+            windows.append(clip.unsqueeze(0))  # [1,F,C,H,W]
+        return torch.cat(windows, dim=0)  # [S,F,C,H,W]
 
     def __len__(self) -> int:
         return len(self.index)
@@ -222,47 +299,34 @@ def collate_concat(batch: List[Tuple[Tensor, int]]):
     return out, torch.tensor(labels, dtype=torch.long)
 
 
-def collate_dict(batch: List[Tuple[Dict[str, Tensor], int]]):
-    """
-    batch: List of ({"edge":[T,C,H,W], "texture":[T,C,H,W], ...}, label)
-    -> (videos_dict, labels)
-       where videos_dict[k] = [B, T_max, C, H, W]
-    """
-    feats_list, labels = zip(*batch)  # tuple of dicts, labels
-    keys = list(feats_list[0].keys())
-
-    # T_max 계산
-    T_max = 0
-    for d in feats_list:
-        T_max = max(T_max, max(v.shape[0] for v in d.values()))
+# collate_dict 수정: temporal은 [B, S_max, F, C, H, W]로, 나머지는 [B, T_max, C, H, W]
+def collate_dict(batch):
+    dicts, labels = zip(*batch)
+    keys = list(dicts[0].keys())
 
     out_dict: Dict[str, Tensor] = {}
-    B = len(feats_list)
+    B = len(dicts)
+
     for k in keys:
-        C, H, W = feats_list[0][k].shape[1:]
-        out = feats_list[0][k].new_zeros((B, T_max, C, H, W))
-        for i, d in enumerate(feats_list):
-            v = d[k]                # [T,C,H,W]
-            T = v.shape[0]
-            out[i, :T] = v
-        out_dict[k] = out
+        sample = dicts[0][k]
+        if sample.ndim == 5:
+            # temporal: [S, F, C, H, W] -> [B, S_max, F, C, H, W]
+            S_max = max(d[k].shape[0] for d in dicts)
+            F, C, H, W = sample.shape[1:]
+            out = sample.new_zeros((B, S_max, F, C, H, W))
+            for i, d in enumerate(dicts):
+                S = d[k].shape[0]
+                out[i, :S] = d[k]
+            out_dict[k] = out
+        else:
+            # 일반: [T, C, H, W] -> [B, T_max, C, H, W]
+            T_max = max(d[k].shape[0] for d in dicts)
+            C, H, W = sample.shape[1:]
+            out = sample.new_zeros((B, T_max, C, H, W))
+            for i, d in enumerate(dicts):
+                v = d[k]
+                T = v.shape[0]
+                out[i, :T] = v
+            out_dict[k] = out
 
     return out_dict, torch.tensor(labels, dtype=torch.long)
-
-
-def collate_sequence(batch: List[Tuple[Dict[str, Tensor], int]]):
-    """
-    batch: [({'temporal':[S,F,C,H,W], ...}, label), ...]
-    -> x: [B, S_max, F, C, H, W], y: [B]
-    (추가로 spatial이 함께 들어온 경우, 필요 시 별도 꺼내 쓰면 됨)
-    """
-    dicts, labels = zip(*batch)
-    key = 'temporal'
-    S_max = max(d[key].shape[0] for d in dicts)
-    B = len(dicts)
-    F, C, H, W = dicts[0][key].shape[1:]
-    out = dicts[0][key].new_zeros((B, S_max, F, C, H, W))
-    for i, d in enumerate(dicts):
-        S = d[key].shape[0]
-        out[i, :S] = d[key]
-    return out, torch.tensor(labels, dtype=torch.long)

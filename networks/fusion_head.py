@@ -18,7 +18,6 @@ class TopKWeightedTowerFusion(nn.Module):
     def __init__(
         self,
         embed_dim: int,
-        n_towers: int,
         hidden: int = 512,
         dropout: float = 0.1,
         use_gate: bool = True,
@@ -42,7 +41,7 @@ class TopKWeightedTowerFusion(nn.Module):
 
         self.out = nn.Linear(hidden, 1)
 
-        self.register_buffer("tower_inv", torch.tensor(1.0 / max(1, n_towers)))
+        self.register_buffer("tower_inv", torch.tensor(1.0 / 4.0))
 
     def forward(self, emb_bte: torch.Tensor, tower_scores_bt: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
