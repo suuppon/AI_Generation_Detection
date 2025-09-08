@@ -41,6 +41,7 @@ class MultiTowerFromCloned(nn.Module):
                  fusion_pool: str = "attn"):
         super().__init__()
         self.topk = int(topk)
+        self.embed_dim = int(embed_dim)
         self.main_device = main_device or next(base_model.parameters()).device
 
         # 타워 이름
@@ -68,9 +69,19 @@ class MultiTowerFromCloned(nn.Module):
                 mod.to(self.main_device)
             self.tower_device_map = {name: self.main_device for name in self.tower_names}
 
-        # self.lstm = nn.LSTM()
-        
-        # ★ Fusion Head 내장
+        # Temporal 전용 모듈
+        temporal_dev = self.tower_device_map.get("temporal", self.main_device)
+        self.temporal_lstm = nn.LSTM(
+            input_size=self.embed_dim,
+            hidden_size=self.embed_dim,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=False,
+            dropout=0.0,
+        ).to(temporal_dev)
+        self.lstm_fc_layer = nn.Linear(self.embed_dim, 1).to(temporal_dev)
+                
+        # Fusion Head
         self.fusion_head = TopKWeightedTowerFusion(
             embed_dim=embed_dim,
             hidden=fusion_hidden,
@@ -107,27 +118,63 @@ class MultiTowerFromCloned(nn.Module):
 
     def _build_fusion_inputs(self, inputs: List[Tensor], k: int) -> Tuple[Tensor, Tensor]:
         """
-        모든 타워(단일 포함)에 대해 Top-K 임베딩 가중합(clip_embed)과 score 계산.
-        returns: emb_bte (B,T,E), scores_bt (B,T)
+        모든 타워(temporal 포함)에 대해 Top-K 임베딩 가중합(clip_embed)과 score 계산.
+        returns:
+          - emb_bte:   (B, T, E)   T=타워 수
+          - scores_bt: (B, T)
         """
         clip_embeds, tower_scores = [], []
+
         for x_bfchw, tower, tower_name in zip(inputs, self.towers, self.tower_names):
             logits_bf, embeds_bfe = self._logits_and_embeddings_one(x_bfchw, tower)
+
             if tower_name == 'temporal':
-                # TODO
-                continue
-            probs_bf = torch.sigmoid(logits_bf)
-            kk = max(1, min(k, probs_bf.size(1)))
-            topk_vals, topk_idx = torch.topk(probs_bf, k=kk, dim=1)         # (B,k)
-            w = torch.softmax(topk_vals, dim=1).unsqueeze(-1)               # (B,k,1)
-            idx = topk_idx.unsqueeze(-1).expand(-1, -1, embeds_bfe.size(-1))  # (B,k,E)
-            topk_embeds = torch.gather(embeds_bfe, dim=1, index=idx)        # (B,k,E)
-            clip_embed_be = (topk_embeds * w).sum(dim=1)                    # (B,E)
-            tower_score_b = topk_vals.mean(dim=1)                           # (B,)
+                # embeds_bfe: (B, F, N, E)  — N(시퀀스 길이)에 대해 LSTM
+                if embeds_bfe.dim() != 4:
+                    raise RuntimeError(f"Temporal tower expects (B,F,N,E), got {embeds_bfe.shape}")
+                B, F, N, E = embeds_bfe.shape
+                tdev = self.temporal_lstm.weight_ih_l0.device
+
+                seq_bfne = embeds_bfe.to(tdev, non_blocking=True).view(B * F, N, E)  # (B*F, N, E)
+                lstm_out, (h_n, c_n) = self.temporal_lstm(seq_bfne)                  # lstm_out: (B*F, N, E)
+                rep_bfe = lstm_out[:, -1, :]                                         # (B*F, E) 마지막 타임스텝
+                score_bf1 = self.lstm_fc_layer(rep_bfe).view(B, F, 1)                # (B, F, 1)
+                probs_bf = torch.sigmoid(score_bf1.squeeze(-1))                      # (B, F)  — 스코어
+
+                # LSTM으로 축약된 임베딩 (B,F,E)
+                embeds_bfe_c = rep_bfe.view(B, F, E).to(self.main_device, non_blocking=True)
+
+                # Top-K (F 차원)
+                kk = max(1, min(k, probs_bf.size(1)))
+                topk_vals, topk_idx = torch.topk(probs_bf, k=kk, dim=1)              # (B,k)
+                w = torch.softmax(topk_vals, dim=1).unsqueeze(-1)                     # (B,k,1)
+                idx = topk_idx.unsqueeze(-1).expand(-1, -1, embeds_bfe_c.size(-1))    # (B,k,E)
+                topk_embeds = torch.gather(embeds_bfe_c, dim=1, index=idx)            # (B,k,E)
+
+                clip_embed_be = (topk_embeds * w).sum(dim=1)                          # (B,E)
+                tower_score_b = topk_vals.mean(dim=1)                                  # (B,)
+
+            else:
+                # 비-Temporal: embeds_bfe: (B,F,E), logits_bf: (B,F)
+                if embeds_bfe.dim() != 3 or logits_bf.dim() != 2:
+                    raise RuntimeError(
+                        f"Non-temporal towers expect (B,F,E) & (B,F). Got {embeds_bfe.shape}, {logits_bf.shape}"
+                    )
+                probs_bf = torch.sigmoid(logits_bf)                                    # (B,F)
+                kk = max(1, min(k, probs_bf.size(1)))
+                topk_vals, topk_idx = torch.topk(probs_bf, k=kk, dim=1)               # (B,k)
+                w = torch.softmax(topk_vals, dim=1).unsqueeze(-1)                      # (B,k,1)
+                idx = topk_idx.unsqueeze(-1).expand(-1, -1, embeds_bfe.size(-1))       # (B,k,E)
+                topk_embeds = torch.gather(embeds_bfe, dim=1, index=idx)               # (B,k,E)
+
+                clip_embed_be = (topk_embeds * w).sum(dim=1)                           # (B,E)
+                tower_score_b = topk_vals.mean(dim=1)                                   # (B,)
+
             clip_embeds.append(clip_embed_be)
             tower_scores.append(tower_score_b)
-        emb_bte = torch.stack(clip_embeds, dim=1)    # (B,T,E)
-        scores_bt = torch.stack(tower_scores, dim=1) # (B,T)
+
+        emb_bte = torch.stack(clip_embeds, dim=1)     # (B,T,E)
+        scores_bt = torch.stack(tower_scores, dim=1)  # (B,T)
         return emb_bte, scores_bt
 
     # ---- 공개 forward ----
