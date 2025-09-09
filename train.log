@@ -1,0 +1,92 @@
+----------------- Options ---------------
+                      amp: False                         
+                     arch: res50                         
+               batch_size: 64                            
+                    beta1: 0.9                           
+                blur_prob: 0                             
+                 blur_sig: 0.5                           
+          checkpoints_dir: ./checkpoints                 
+                class_bal: False                         
+                  classes:                               
+           continue_train: False                         
+                 cropSize: 224                           
+                 data_aug: False                         
+                 dataroot: ./images                      	[default: ./dataset/]
+                delr_freq: 20                            
+            deterministic: False                         
+          earlystop_epoch: 15                            
+            embedding_dim: 512                           
+                    epoch: latest                        
+              epoch_count: 1                             
+                   epochs: 1000                          
+                 features: edge,texture,other            
+                frame_max: -1                            
+              frame_start: 0                             
+             frame_stride: 1                             
+          frames_per_clip: 1                             
+           fusion_dropout: 0.1                           
+            fusion_hidden: 512                           
+              fusion_pool: attn                          
+          fusion_use_gate: True                          
+                  gpu_ids: 0                             
+         grad_accum_steps: 1                             
+                grad_clip: 0.0                           
+                init_gain: 0.02                          
+                init_type: normal                        
+                  isTrain: True                          	[default: None]
+               jpg_method: cv2                           
+                 jpg_prob: 0                             
+                 jpg_qual: 75                            
+               last_epoch: -1                            
+                 loadSize: 256                           
+                loss_freq: 400                           
+                       lr: 0.0001                        
+     max_videos_per_class: -1                            
+                     mode: binary                        
+                     name: experiment_name2025_09_09_10_09_18	[default: experiment_name]
+                new_optim: False                         
+                  no_flip: False                         
+              num_threads: 8                             
+               num_towers: 3                             
+                    optim: adam                          
+               pin_memory: False                         
+              proc_config:                               
+           resize_or_crop: scale_and_crop                
+                rz_interp: bilinear                      
+         save_best_metric: val_acc                       
+          save_epoch_freq: 20                            
+         save_latest_freq: 2000                          
+                    sched: cosine                        
+                     seed: 1337                          
+           serial_batches: False                         
+      sort_frames_numeric: False                         
+                   suffix:                               
+                     topk: 0                             
+            tower_devices:                               
+              train_split: train                         
+             val_dataroot: ./project/jskim/samples       
+                val_epoch: 2                             
+                val_split: val                           
+             warmup_steps: 0                             
+             weight_decay: 0.0                           
+----------------- End -------------------
+# 문제가 있던 동영상 1148 번 확인해볼 것
+train.py  --dataroot  ./images
+[INFO] fusion=ON (built-in at MultiTower), features=['edge', 'texture', 'other']
+./images/fake/face_video_1.mp4 is processing ... 
+./images/fake/face_video_1.mp4 is processed, in 34 s
+./images/fake/face_video_2.mp4 is processing ... 
+./images/fake/face_video_2.mp4 is processed, in 31 s
+./images/fake/face_video_3.mp4 is processing ... 
+./images/fake/face_video_3.mp4 is processed, in 36 s
+./images/fake/face_video_4.mp4 is processing ... 
+./images/fake/face_video_4.mp4 is processed, in 38 s
+./images/fake/face_video_5.mp4 is processing ... 
+./images/fake/face_video_5.mp4 is processed, in ./images/fake/face_video_6.mp4 is processed, in 84 s
+./images/fake/face_video_7.mp4 is processing ... 
+./images/fake/face_video_7.mp4 is processed, in 51 s
+./images/fake/face_video_8.mp4 is processing ... 
+./images/fake/face_video_8.mp4 is processed, in 58 s
+./images/fake/face_video_9.mp4 is processing ... 
+./images/fake/face_video_9.mp4 is processed, in 36 s
+./images/fake/face_video_10.mp4 is processing ... 

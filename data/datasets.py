@@ -12,6 +12,10 @@ from tqdm import tqdm
 # === FeatureManager 불러오기 ===
 from utils.feature_manager import FeatureManager
 
+### CPU 별렬 처리
+from multiprocessing import Pool
+import time
+
 Tensor = torch.Tensor
 
 
@@ -119,6 +123,8 @@ class MultiProcVideoDataset(Dataset):
 
         # 비디오 단위로 가공
         for vdir, label in self.index:
+            print(f"{vdir} is processing ... ")
+            start = time.time()
             frame_paths = self._sorted_frames(vdir)
             if not frame_paths:
                 raise RuntimeError(f"비디오에서 프레임을 찾을 수 없습니다: {vdir}")
@@ -133,27 +139,34 @@ class MultiProcVideoDataset(Dataset):
                 continue
 
             # 기존 dict/concat 경로 (단일 프레임 반복)
-            features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
-            for fp in tqdm(frame_paths, desc=f"Processing {vdir}"):
-                processed = self.processor.process_one(fp)
-                for k, t in processed.items():
-                    features_map[k].append(t)
+            #features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
+            
 
+
+            #비정상적으로 길게 걸리는 이미지 처리
+            fp = frame_paths[0]
+            img = cv2.imread(fp)
+            if img is None:
+                print(f"읽기 실패, 건너뜀: {fp}")
+                continue  # 읽기 실패하면 다음 프레임으로 넘어감
+
+            if len(frame_paths) > 1000:
+                print(f"너무 김, 건너뜀: {fp}")
+                continue  # 읽기 실패하면 다음 프레임으로 넘어감
+
+            with Pool(processes=4) as pool:  # CPU 코어 수
+                processed = pool.map(self.processor.process_one, frame_paths)
+                features_map = {key: torch.from_numpy(np.stack([item[key] for item in processed], axis=0)) for key in self.processor.features}
+            
+            end = time.time()
+            print(f"{vdir} is processed, in {round(end - start)} s")
             # 유효성 검사
             if any(len(v) == 0 for v in features_map.values()):
                 raise RuntimeError(f"처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다: {vdir}")
+            
+            self.tank.append((features_map, label))
 
-            # 모든 특징들을 텐서로 스택
-            for k in list(features_map.keys()):
-                features_map[k] = torch.stack(features_map[k], dim=0)  # [T,C,H,W]
-
-            if self.mode == "dict":
-                self.tank.append((features_map, label))
-            else:  # "concat"
-                # C축으로 concat
-                keys = sorted(features_map.keys())
-                cat = torch.cat([features_map[k] for k in keys], dim=1)  # [T, sumC, H, W]
-                self.tank.append((cat, label))
+    
 
     def _index_class(self, class_dir: str, label: int):
         if not os.path.isdir(class_dir):
