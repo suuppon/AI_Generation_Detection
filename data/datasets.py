@@ -16,6 +16,14 @@ from utils.feature_manager import FeatureManager
 from multiprocessing import Pool
 import time
 
+import signal
+
+class TimeoutException(Exception):
+    pass
+
+def handler(signum, frame):
+    raise TimeoutException()
+
 Tensor = torch.Tensor
 
 
@@ -122,6 +130,9 @@ class MultiProcVideoDataset(Dataset):
         self.tank: List[Tuple[Union[Dict[str, Tensor], Tensor], int]] = []
 
         # 비디오 단위로 가공
+        #시그널
+        signal.signal(signal.SIGALRM, handler)
+
         for vdir, label in self.index:
             print(f"{vdir} is processing ... ")
             start = time.time()
@@ -149,14 +160,16 @@ class MultiProcVideoDataset(Dataset):
             if img is None:
                 print(f"읽기 실패, 건너뜀: {fp}")
                 continue  # 읽기 실패하면 다음 프레임으로 넘어감
-
-            if len(frame_paths) > 1000:
-                print(f"너무 김, 건너뜀: {fp}")
-                continue  # 읽기 실패하면 다음 프레임으로 넘어감
-
-            with Pool(processes=4) as pool:  # CPU 코어 수
-                processed = pool.map(self.processor.process_one, frame_paths)
-                features_map = {key: torch.from_numpy(np.stack([item[key] for item in processed], axis=0)) for key in self.processor.features}
+            
+            try:
+                signal.alarm(600)
+                with Pool(processes=4) as pool:  # CPU 코어 수
+                    processed = pool.map(self.processor.process_one, frame_paths)
+                    features_map = {key: torch.from_numpy(np.stack([item[key] for item in processed], axis=0)) for key in self.processor.features}
+                signal.alarm(0)
+            except TimeoutException:
+                print(f"{vdir} 처리 시간 초과, 건너뜀")
+                continue
             
             end = time.time()
             print(f"{vdir} is processed, in {round(end - start)} s")

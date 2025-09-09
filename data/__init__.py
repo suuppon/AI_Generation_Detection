@@ -85,9 +85,9 @@ def get_bal_sampler(dataset):
 def create_dataloader(opt,mode):
     dataset = get_dataset(opt,mode)
 
-    with open("./dataset_multi_cpu.pkl", "wb") as f:
+    with open("./dataset_multi_cpu_timeout.pkl", "wb") as f:
         pickle.dump(dataset, f)
-    with open("./dataset_multi_cpu.pkl", "rb") as f:
+    with open("./dataset_multi_cpu_timeout.pkl", "rb") as f:
         dataset = pickle.load(f)
 
     shuffle = not getattr(opt, "serial_batches", False) if (getattr(opt, "isTrain", True) and not getattr(opt, "class_bal", False)) else False
