@@ -1,0 +1,213 @@
+----------------- Options ---------------
+                      amp: False                         
+                     arch: res50                         
+               batch_size: 64                            
+                    beta1: 0.9                           
+                blur_prob: 0                             
+                 blur_sig: 0.5                           
+          checkpoints_dir: ./checkpoints                 
+                class_bal: False                         
+                  classes:                               
+           continue_train: False                         
+                 cropSize: 224                           
+                 data_aug: False                         
+                 dataroot: ./images                      	[default: ./dataset/]
+                delr_freq: 20                            
+            deterministic: False                         
+          earlystop_epoch: 15                            
+            embedding_dim: 512                           
+                    epoch: latest                        
+              epoch_count: 1                             
+                   epochs: 1000                          
+                 features: edge,texture,other            
+                frame_max: -1                            
+              frame_start: 0                             
+             frame_stride: 1                             
+          frames_per_clip: 1                             
+           fusion_dropout: 0.1                           
+            fusion_hidden: 512                           
+              fusion_pool: attn                          
+          fusion_use_gate: True                          
+                  gpu_ids: 0                             
+         grad_accum_steps: 1                             
+                grad_clip: 0.0                           
+                init_gain: 0.02                          
+                init_type: normal                        
+                  isTrain: True                          	[default: None]
+               jpg_method: cv2                           
+                 jpg_prob: 0                             
+                 jpg_qual: 75                            
+               last_epoch: -1                            
+                 loadSize: 256                           
+                loss_freq: 400                           
+                       lr: 0.0001                        
+     max_videos_per_class: -1                            
+                     mode: binary                        
+                     name: experiment_name2025_09_09_13_04_08	[default: experiment_name]
+                new_optim: False                         
+                  no_flip: False                         
+              num_threads: 8                             
+               num_towers: 3                             
+                    optim: adam                          
+               pin_memory: False                         
+              proc_config:                               
+           resize_or_crop: scale_and_crop                
+                rz_interp: bilinear                      
+         save_best_metric: val_acc                       
+          save_epoch_freq: 20                            
+         save_latest_freq: 2000                          
+                    sched: cosine                        
+                     seed: 1337                          
+           serial_batches: False                         
+      sort_frames_numeric: False                         
+                   suffix:                               
+                     topk: 0                             
+            tower_devices:                               
+              train_split: train                         
+             val_dataroot: ./project/jskim/samples       
+                val_epoch: 2                             
+                val_split: val                           
+             warmup_steps: 0                             
+             weight_decay: 0.0                           
+----------------- End -------------------
+train.py  --dataroot  ./images
+[INFO] fusion=ON (built-in at MultiTower), features=['edge', 'texture', 'other']
+./images/fake/face_video_623.mp4 is processing ... 
+./images/fake/face_video_623.mp4 is processed, in 47 s
+./images/fake/face_video_1163.mp4 is processing ... 
+Process ForkPoolWorker-6:
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 427, in _send_bytes
+    self._send(header + buf)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+Process ForkPoolWorker-5:
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 427, in _send_bytes
+    self._send(header + buf)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+Process ForkPoolWorker-7:
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 427, in _send_bytes
+    self._send(header + buf)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+Process ForkPoolWorker-8:
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 131, in worker
+    put((job, i, result))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 427, in _send_bytes
+    self._send(header + buf)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/pool.py", line 136, in worker
+    put((job, i, (False, wrapped)))
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/queues.py", line 377, in put
+    self._writer.send_bytes(obj)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 200, in send_bytes
+    self._send_bytes(m[offset:offset + size])
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 420, in _send_bytes
+    self._send(header)
+  File "/home/jwchoi/miniconda3/envs/.venv/lib/python3.11/multiprocessing/connection.py", line 384, in _send
+    n = write(self._handle, buf)
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+BrokenPipeError: [Errno 32] Broken pipe

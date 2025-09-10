@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
+import random
 
 # === FeatureManager 불러오기 ===
 from utils.feature_manager import FeatureManager
@@ -17,6 +18,7 @@ from multiprocessing import Pool
 import time
 
 import signal
+import pickle
 
 class TimeoutException(Exception):
     pass
@@ -132,6 +134,8 @@ class MultiProcVideoDataset(Dataset):
         # 비디오 단위로 가공
         #시그널
         signal.signal(signal.SIGALRM, handler)
+        #랜덤성 부여
+        random.shuffle(self.index)
 
         for vdir, label in self.index:
             print(f"{vdir} is processing ... ")
@@ -153,7 +157,6 @@ class MultiProcVideoDataset(Dataset):
             #features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
             
 
-
             #비정상적으로 길게 걸리는 이미지 처리
             fp = frame_paths[0]
             img = cv2.imread(fp)
@@ -162,7 +165,7 @@ class MultiProcVideoDataset(Dataset):
                 continue  # 읽기 실패하면 다음 프레임으로 넘어감
             
             try:
-                signal.alarm(600)
+                signal.alarm(300)
                 with Pool(processes=4) as pool:  # CPU 코어 수
                     processed = pool.map(self.processor.process_one, frame_paths)
                     features_map = {key: torch.from_numpy(np.stack([item[key] for item in processed], axis=0)) for key in self.processor.features}
@@ -178,6 +181,7 @@ class MultiProcVideoDataset(Dataset):
                 raise RuntimeError(f"처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다: {vdir}")
             
             self.tank.append((features_map, label))
+
 
     
 
