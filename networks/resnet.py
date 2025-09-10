@@ -152,17 +152,8 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
     def interpolate(self, img, factor):
         return F.interpolate(F.interpolate(img, scale_factor=factor, mode='nearest', recompute_scale_factor=True), scale_factor=1/factor, mode='nearest', recompute_scale_factor=True)
-    def forward(self, x):
-        # n,c,w,h = x.shape
-        # if -1*w%2 != 0: x = x[:,:,:w%2*-1,:      ]
-        # if -1*h%2 != 0: x = x[:,:,:      ,:h%2*-1]
-        # factor = 0.5
-        # x_half = F.interpolate(x, scale_factor=factor, mode='nearest', recompute_scale_factor=True)
-        # x_re   = F.interpolate(x_half, scale_factor=1/factor, mode='nearest', recompute_scale_factor=True)
-        # NPR  = x - x_re
-        # n,c,w,h = x.shape
-        # if w%2 == 1 : x = x[:,:,:-1,:]
-        # if h%2 == 1 : x = x[:,:,:,:-1]
+    
+    def get_embedding(self, x):
         NPR  = x - self.interpolate(x, 0.5)
 
         x = self.conv1(NPR*2.0/3.0)
@@ -175,6 +166,23 @@ class ResNet(nn.Module):
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
+        
+        return x
+    
+    def forward(self, x):
+        # n,c,w,h = x.shape
+        # if -1*w%2 != 0: x = x[:,:,:w%2*-1,:      ]
+        # if -1*h%2 != 0: x = x[:,:,:      ,:h%2*-1]
+        # factor = 0.5
+        # x_half = F.interpolate(x, scale_factor=factor, mode='nearest', recompute_scale_factor=True)
+        # x_re   = F.interpolate(x_half, scale_factor=1/factor, mode='nearest', recompute_scale_factor=True)
+        # NPR  = x - x_re
+        # n,c,w,h = x.shape
+        # if w%2 == 1 : x = x[:,:,:-1,:]
+        # if h%2 == 1 : x = x[:,:,:,:-1]
+        
+        self.embedding = self.get_embedding(x)
+        x = self.embedding
         x = self.fc1(x)
 
         return x

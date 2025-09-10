@@ -1,0 +1,30 @@
+{
+    "texture": {
+        "target_size": [224, 224],
+        "gabor_angles": [0, 45, 90, 135],
+        "gabor_freq": 0.1,
+        "lbp_radius": 1,
+        "lbp_points": 8,
+        "use_gabor": true,
+        "use_lbp": true,
+        "texture_weight": 0.3,
+        "normalize": true
+    },
+    "edge": {
+        "target_size": [224, 224],
+        "canny_low": 50,
+        "canny_high": 150,
+        "edge_method": "canny",
+        "edge_weight": 0.4,
+        "edge_enhancement": false,
+        "normalize": true
+    },
+    "other": {
+        "target_size": [224, 224],
+        "histogram_equalization": true,
+        "contrast_enhancement": true,
+        "noise_reduction": false,
+        "blur": false,
+        "normalize": true
+    }
+}

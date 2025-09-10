@@ -1,111 +1,127 @@
-import os
-import sys
-import time
+# train.py
+import os, sys, time, random
 import torch
-import torch.nn
-import argparse
-from PIL import Image
-from tensorboardX import SummaryWriter
 import numpy as np
-from validate import validate
-from data import create_dataloader
-from networks.trainer import Trainer
-from options.train_options import TrainOptions
-from options.test_options import TestOptions
-from util import Logger
+from tensorboardX import SummaryWriter
+from tqdm.auto import tqdm
 
-import random
-def seed_torch(seed=1029):
+from data import create_dataloader
+from utils.trainer import Trainer
+from options.train_options import TrainOptions
+from util import Logger
+from validate import validate
+
+def seed_torch(seed: int = 1029):
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.enabled = False
 
 
-# test config
-vals = ['progan', 'stylegan', 'stylegan2', 'biggan', 'cyclegan', 'stargan', 'gaugan', 'deepfake']
-multiclass = [1, 1, 1, 0, 1, 0, 0, 0]
-
-
-def get_val_opt():
-    val_opt = TrainOptions().parse(print_options=False)
-    val_opt.dataroot = '{}/{}/'.format(val_opt.dataroot, val_opt.val_split)
-    val_opt.isTrain = False
-    val_opt.no_resize = False
-    val_opt.no_crop = False
-    val_opt.serial_batches = True
-
-    return val_opt
-
-
-if __name__ == '__main__':
+def main():
     opt = TrainOptions().parse()
     seed_torch(100)
-    Testdataroot = os.path.join(opt.dataroot, 'test')
-    opt.dataroot = '{}/{}/'.format(opt.dataroot, opt.train_split)
-    Logger(os.path.join(opt.checkpoints_dir, opt.name, 'log.log'))
-    print('  '.join(list(sys.argv)) )
-    val_opt = get_val_opt()
-    Testopt = TestOptions().parse(print_options=False)
-    data_loader = create_dataloader(opt)
 
-    train_writer = SummaryWriter(os.path.join(opt.checkpoints_dir, opt.name, "train"))
-    val_writer = SummaryWriter(os.path.join(opt.checkpoints_dir, opt.name, "val"))
-    
+    # ===== 기본 세팅 보정 =====
+    opt.isTrain = True
+    if not getattr(opt, "proc_mode", None):
+        opt.proc_mode = "dict"  # dict 파이프 권장
+    if not getattr(opt, "features", None):
+        opt.features = ["edge", "texture"]  # 최소 1개 이상 필요
+
+    # 로그 파일
+    Logger(os.path.join(opt.checkpoints_dir, opt.name, "log.log"))
+    print("  ".join(list(sys.argv)))
+    print(f"[INFO] fusion=ON (built-in at MultiTower), features={opt.features}")
+
+    # ===== DataLoader =====
+    data_loader = create_dataloader(opt,"train")
+
+
+    # ===== SummaryWriter =====
+    tb_dir = os.path.join(opt.checkpoints_dir, opt.name, "train")
+    os.makedirs(tb_dir, exist_ok=True)
+    train_writer = SummaryWriter(tb_dir)
+
+    # ===== Model =====
     model = Trainer(opt)
-    
-    def testmodel():
-        print('*'*25);accs = [];aps = []
-        print(time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()))
-        for v_id, val in enumerate(vals):
-            Testopt.dataroot = '{}/{}'.format(Testdataroot, val)
-            Testopt.classes = os.listdir(Testopt.dataroot) if multiclass[v_id] else ['']
-            Testopt.no_resize = False
-            Testopt.no_crop = True
-            acc, ap, _, _, _, _ = validate(model.model, Testopt)
-            accs.append(acc);aps.append(ap)
-            print("({} {:10}) acc: {:.1f}; ap: {:.1f}".format(v_id, val, acc*100, ap*100))
-        print("({} {:10}) acc: {:.1f}; ap: {:.1f}".format(v_id+1,'Mean', np.array(accs).mean()*100, np.array(aps).mean()*100));print('*'*25) 
-        print(time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()))
-    model.eval();testmodel();
+
     model.train()
-    print(f'cwd: {os.getcwd()}')
-    for epoch in range(opt.niter):
+    print(f"cwd: {os.getcwd()}")
+
+    for epoch in range(opt.epochs):
         epoch_start_time = time.time()
-        iter_data_time = time.time()
-        epoch_iter = 0
+        running_loss = 0.0
+        num_steps = 0
 
-        for i, data in enumerate(data_loader):
+        pbar = tqdm(
+            data_loader,
+            desc=f"Epoch {epoch+1}/{opt.epochs}",
+            dynamic_ncols=True,
+            leave=False,
+        )
+
+        for i, data in enumerate(pbar):
             model.total_steps += 1
-            epoch_iter += opt.batch_size
 
+            # data: (views, labels)
+            #   - dict 모드: {'edge':(B,F,C,H,W), 'texture':(...), ...}, labels
+            #   - list/tuple 모드: [(B,F,C,H,W), ...], labels
             model.set_input(data)
             model.optimize_parameters()
 
+            # 통계/표시
+            loss_val = float(model.loss.detach())
+            running_loss += loss_val
+            num_steps += 1
+            lr_now = model.optimizer.param_groups[0]["lr"]
+
+            pbar.set_postfix({"loss": f"{loss_val:.4f}", "lr": f"{lr_now:.2e}", "step": model.total_steps})
+
             if model.total_steps % opt.loss_freq == 0:
-                print(time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()), "Train loss: {} at step: {} lr {}".format(model.loss, model.total_steps, model.lr))
-                train_writer.add_scalar('loss', model.loss, model.total_steps)
+                print(
+                    time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()),
+                    f"Train loss: {loss_val:.6f} at step: {model.total_steps} lr {lr_now:g}",
+                )
+                train_writer.add_scalar("loss", loss_val, model.total_steps)
+                train_writer.add_scalar("lr", float(lr_now), model.total_steps)
 
-        if epoch % opt.delr_freq == 0 and epoch != 0:
-            print(time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()), 'changing lr at the end of epoch %d, iters %d' %
-                  (epoch, model.total_steps))
+        # Epoch 통계
+        if num_steps > 0:
+            avg_loss = running_loss / num_steps
+            print(
+                time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()),
+                f"[Epoch {epoch+1}/{opt.epochs}] avg_loss: {avg_loss:.6f}, steps: {model.total_steps}",
+            )
+            train_writer.add_scalar("epoch_avg_loss", float(avg_loss), epoch + 1)
+
+        # 주기적 LR decay
+        if epoch % getattr(opt, "delr_freq", 1) == 0 and epoch != 0:
+            print(
+                time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()),
+                f"changing lr at the end of epoch {epoch}, iters {model.total_steps}",
+            )
             model.adjust_learning_rate()
-            
 
-        # Validation
-        model.eval()
-        acc, ap = validate(model.model, val_opt)[:2]
-        val_writer.add_scalar('accuracy', acc, model.total_steps)
-        val_writer.add_scalar('ap', ap, model.total_steps)
-        print("(Val @ epoch {}) acc: {}; ap: {}".format(epoch, acc, ap))
-        testmodel()
-        model.train()
+        if epoch % opt.val_epoch == 0 and epoch != 0:
 
-    model.eval();testmodel()
-    model.save_networks('last')
-    
+            acc, ap, r_acc, f_acc, y_true, y_pred = validate(model.model ,opt)
+            print(f"Acc : {acc}")
+            print(f"Average_precision : {ap}")
+            print(f"Real Acc : {r_acc}")
+            print(f"Fake Acc : {f_acc}")
+
+            model.model.train()
+
+    # 마지막 저장
+    model.save_networks("last")
+    print("[DONE] training finished.")
+
+
+if __name__ == "__main__":
+    main()

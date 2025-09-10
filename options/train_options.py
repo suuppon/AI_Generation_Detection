@@ -16,11 +16,20 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--last_epoch', type=int, default=-1, help='starting epoch count for scheduler intialization')
         parser.add_argument('--train_split', type=str, default='train', help='train, val, test, etc')
         parser.add_argument('--val_split', type=str, default='val', help='train, val, test, etc')
-        parser.add_argument('--niter', type=int, default=1000, help='# of iter at starting learning rate')
+        parser.add_argument('--epochs', type=int, default=1000, help='# of iter at starting learning rate')
         parser.add_argument('--beta1', type=float, default=0.9, help='momentum term of adam')
         parser.add_argument('--lr', type=float, default=0.0001, help='initial learning rate for adam')
+        parser.add_argument('--val_epoch', type=float, default=2, help='몇 번째 에폭마다 val 저장할거냐')
+        parser.add_argument('--val_dataroot', type=str, default="./project/jskim/samples", help='val 데이터 루트')
         # parser.add_argument('--model_path')
         # parser.add_argument('--no_resize', action='store_true')
         # parser.add_argument('--no_crop', action='store_true')
+        
+        parser.add_argument('--weight_decay', type=float, default=0.0, help='L2 weight decay')
+        parser.add_argument('--sched', type=str, default='cosine', choices=['cosine','step','none'],
+                            help='lr scheduler type')
+        parser.add_argument('--warmup_steps', type=int, default=0, help='warmup steps for scheduler')
+        parser.add_argument('--save_best_metric', type=str, default='val_acc',
+                            help='metric name to track best checkpoint (e.g., val_acc, val_auc, val_loss)')
         self.isTrain = True
         return parser

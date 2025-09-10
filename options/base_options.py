@@ -14,7 +14,7 @@ class BaseOptions():
     def initialize(self, parser):
         parser.add_argument('--mode', default='binary')
         parser.add_argument('--arch', type=str, default='res50', help='architecture for binary classification')
-
+        
         # data augmentation
         parser.add_argument('--rz_interp', default='bilinear')
         parser.add_argument('--blur_prob', type=float, default=0)
@@ -41,10 +41,66 @@ class BaseOptions():
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{loadSize}')
         parser.add_argument('--delr_freq', type=int, default=20, help='frequency of changing lr')
-
         
+        parser.add_argument('--features', type=str, default='edge,texture,other',
+                            help='comma-separated features to use: edge,texture,other')
+        parser.add_argument('--proc_config', type=str, default='',
+                            help='JSON path for FeatureManager configuration (optional)')
+        parser.add_argument('--max_videos_per_class', type=int, default=-1,
+                            help='limit #videos per class during indexing (-1: no limit)')
+        parser.add_argument('--sort_frames_numeric', action='store_true',
+                            help='sort frame files numerically if possible')
+        parser.add_argument('--pin_memory', action='store_true',
+                            help='enable pin_memory=True for DataLoader')
+
+        # === 추가: 시퀀스 샘플링 ===
+        parser.add_argument('--frame_max', type=int, default=-1,
+                            help='max frames per video (-1: use all)')
+        parser.add_argument('--frame_stride', type=int, default=1,
+                            help='sample every Nth frame (>=1)')
+        parser.add_argument('--frame_start', type=int, default=0,
+                            help='start frame index offset (>=0)')
+
+        # === 추가: 재현성/성능 ===
+        parser.add_argument('--seed', type=int, default=1337, help='random seed')
+        parser.add_argument('--deterministic', action='store_true', help='torch.backends.cudnn.deterministic=True')
+        parser.add_argument('--amp', action='store_true', help='enable mixed-precision training (torch.cuda.amp)')
+        parser.add_argument('--grad_accum_steps', type=int, default=1, help='gradient accumulation steps')
+        parser.add_argument('--grad_clip', type=float, default=0.0, help='clip grad norm if > 0')
+
+        # === Multi-Tower / Fusion ===
+        parser.add_argument('--num_towers', type=int, default=3,
+                            help='0이면 features 길이(or 1)로 자동 결정')
+        parser.add_argument('--tower_devices', type=str, default='',
+                            help='멀티타워 장치 매핑. 예) "0,1,2" (비우면 main_device 사용)')
+
+        # clip 구성
+        parser.add_argument('--frames_per_clip', type=int, default=1,
+                            help='모델이 한 번에 처리하는 프레임 수(F)')
+        parser.add_argument('--topk', type=int, default=0,
+                            help='Fusion에서 사용할 프레임 Top-K (<=0이면 F//3로 자동)')
+
+        # Fusion Head 설정
+        parser.add_argument('--embedding_dim', type=int, default=512,
+                            help='base_model.get_embedding() 출력 차원')
+        parser.add_argument('--fusion_hidden', type=int, default=512,
+                            help='Fusion MLP hidden dim')
+        parser.add_argument('--fusion_dropout', type=float, default=0.1,
+                            help='Fusion dropout')
+        parser.add_argument('--fusion_pool', type=str, default='attn',
+                            choices=['attn', 'mean', 'max'],
+                            help='Fusion 내부 풀 방식')
+        # bool 플래그는 on/off 한 쌍으로
+        parser.add_argument('--fusion_use_gate', dest='fusion_use_gate',
+                            action='store_true', help='게이팅 사용 (기본 on)')
+        parser.add_argument('--no_fusion_gate', dest='fusion_use_gate',
+                            action='store_false', help='게이팅 끄기')
+        parser.set_defaults(fusion_use_gate=True)
+
+        # 나머지 기존 옵션 그대로 ...
         self.initialized = True
         return parser
+        
 
     def gather_options(self):
         # initialize parser with basic options
@@ -113,6 +169,31 @@ class BaseOptions():
             opt.jpg_qual = list(range(opt.jpg_qual[0], opt.jpg_qual[1] + 1))
         elif len(opt.jpg_qual) > 2:
             raise ValueError("Shouldn't have more than 2 values for --jpg_qual.")
+
+        opt.features = [s for s in opt.features.split(',') if s] if isinstance(opt.features, str) else opt.features
+        if opt.max_videos_per_class is not None and opt.max_videos_per_class < 0:
+            opt.max_videos_per_class = None
+        if not opt.proc_config:
+            opt.proc_config = None
+        if opt.frame_max is not None and opt.frame_max < 0:
+            opt.frame_max = None
+        if opt.frame_stride < 1:
+            opt.frame_stride = 1
+        if opt.frame_start < 0:
+            opt.frame_start = 0
+
+        # 재현성
+        if opt.seed is not None:
+            import random
+            import numpy as np
+            random.seed(opt.seed)
+            np.random.seed(opt.seed)
+            torch.manual_seed(opt.seed)
+            if len(opt.gpu_ids) > 0:
+                torch.cuda.manual_seed_all(opt.seed)
+        if opt.deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
         self.opt = opt
         return self.opt
