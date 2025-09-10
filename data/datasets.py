@@ -8,9 +8,23 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
+import random
 
 # === FeatureManager 불러오기 ===
 from utils.feature_manager import FeatureManager
+
+### CPU 별렬 처리
+from multiprocessing import Pool
+import time
+
+import signal
+import pickle
+
+class TimeoutException(Exception):
+    pass
+
+def handler(signum, frame):
+    raise TimeoutException()
 
 Tensor = torch.Tensor
 
@@ -131,8 +145,15 @@ class MultiProcVideoDataset(Dataset):
         # 미리 가공 저장
         self.tank: List[Tuple[Union[Dict[str, Tensor], Tensor], int]] = []
 
-        # 비디오 단위 전처리
+        # 비디오 단위로 가공
+        #시그널
+        signal.signal(signal.SIGALRM, handler)
+        #랜덤성 부여
+        random.shuffle(self.index)
+
         for vdir, label in self.index:
+            print(f"{vdir} is processing ... ")
+            start = time.time()
             frame_paths = self._sorted_frames(vdir)
             if not frame_paths:
                 raise RuntimeError(f"비디오에서 프레임을 찾을 수 없습니다: {vdir}")
@@ -147,13 +168,29 @@ class MultiProcVideoDataset(Dataset):
                 self.tank.append((out_dict, label))
                 continue
 
-            # --- dict/concat 모드: 프레임별 spatial 피처 계산 ---
-            features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
-            for fp in tqdm(frame_paths, desc=f"Processing {vdir}"):
-                processed = self.processor.process_one(fp)  # {"edge": [C,H,W], ...}
-                for k, t in processed.items():
-                    features_map[k].append(t)
+            # 기존 dict/concat 경로 (단일 프레임 반복)
+            #features_map: Dict[str, List[torch.Tensor]] = {k: [] for k in self.processor.features}
+            
 
+            #비정상적으로 길게 걸리는 이미지 처리
+            fp = frame_paths[0]
+            img = cv2.imread(fp)
+            if img is None:
+                print(f"읽기 실패, 건너뜀: {fp}")
+                continue  # 읽기 실패하면 다음 프레임으로 넘어감
+            
+            try:
+                signal.alarm(300)
+                with Pool(processes=4) as pool:  # CPU 코어 수
+                    processed = pool.map(self.processor.process_one, frame_paths)
+                    features_map = {key: torch.from_numpy(np.stack([item[key] for item in processed], axis=0)) for key in self.processor.features}
+                signal.alarm(0)
+            except TimeoutException:
+                print(f"{vdir} 처리 시간 초과, 건너뜀")
+                continue
+            
+            end = time.time()
+            print(f"{vdir} is processed, in {round(end - start)} s")
             # 유효성 검사
             if any(len(v) == 0 for v in features_map.values()):
                 raise RuntimeError(f"처리된 특징 맵이 비어있습니다. 손상된 비디오일 수 있습니다: {vdir}")
