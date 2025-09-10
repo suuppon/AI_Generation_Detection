@@ -11,7 +11,7 @@ def validate(model, opt):
 
     with torch.no_grad():
         y_true, y_pred = [], []
-        for img, label in data_loader:
+        for img, label, _ in data_loader:
             in_tens = img.cuda()
             y_pred.extend(model(in_tens).sigmoid().flatten().tolist())
             y_true.extend(label.flatten().tolist())

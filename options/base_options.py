@@ -42,6 +42,7 @@ class BaseOptions():
         parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{loadSize}')
         parser.add_argument('--delr_freq', type=int, default=20, help='frequency of changing lr')
 
+        parser.add_argument('--transform_mode', type=str, default='texture', help='mode to transform')
         
         self.initialized = True
         return parser
