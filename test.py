@@ -18,7 +18,7 @@ from xai_gradcam import save_cams_for_folder
 # --------------------------
 # 공통 설정
 # --------------------------
-BASE_DATAROOT = "/data/Deepfake_test"   # 요청한 dataroot
+BASE_DATAROOT = "/data/Deepfake_train_val/test"   # 요청한 dataroot
 # 이미지 전처리 기본값 (필요하면 바꿔도 됨)
 NO_RESIZE_DEFAULT = False               # 다양한 해상도면 False 권장
 NO_CROP_DEFAULT   = True
@@ -48,7 +48,51 @@ opt = TestOptions().parse(print_options=False)
 print(f'Model_path {opt.model_path}')
 
 model = resnet50(num_classes=1)
-model.load_state_dict(torch.load(opt.model_path, map_location='cpu'), strict=True)
+
+# --- robust state_dict loader ---
+ckpt = torch.load(opt.model_path, map_location='cpu')
+
+# 1) 체크포인트 안에서 state_dict 추출 (형태 가리지 않기)
+if isinstance(ckpt, dict):
+    if 'state_dict' in ckpt:
+        sd = ckpt['state_dict']
+    elif 'model' in ckpt and isinstance(ckpt['model'], dict):
+        sd = ckpt['model']
+    else:
+        # 이미 state_dict 그 자체로 저장된 경우
+        sd = ckpt
+else:
+    sd = ckpt
+
+# 2) DataParallel 프리픽스 제거
+new_sd = {}
+for k, v in sd.items():
+    nk = k
+    if nk.startswith('module.'):
+        nk = nk[len('module.'):]
+    new_sd[nk] = v
+
+# (필요시) 마지막 레이어 이름 정합성 체크 (fc vs fc1 등)
+# 현재 모델은 fc1을 사용하므로, 만약 키가 fc.* 형태라면 fc1.*로 매핑
+if any(k.startswith('fc.') for k in new_sd.keys()) and \
+   not any(k.startswith('fc1.') for k in new_sd.keys()):
+    tmp = {}
+    for k, v in new_sd.items():
+        if k.startswith('fc.'):
+            tmp['fc1.' + k[len('fc.'):]] = v
+        else:
+            tmp[k] = v
+    new_sd = tmp
+
+# 3) 로드 (엄격 모드로 시도 → 실패 시 느슨하게)
+missing, unexpected = model.load_state_dict(new_sd, strict=False)
+if missing or unexpected:
+    print("[load_state_dict] warning")
+    if missing:
+        print("  missing:", missing)
+    if unexpected:
+        print("  unexpected:", unexpected)
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 model.eval()
