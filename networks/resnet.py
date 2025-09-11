@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 from torch.nn import functional as F
@@ -150,6 +151,26 @@ class ResNet(nn.Module):
             layers.append(block(self.inplanes, planes))
 
         return nn.Sequential(*layers)
+    
+    def _down_up_same(self, x: torch.Tensor, scale: float = 0.5,
+                    mode: str = "bilinear", align_corners: bool = False) -> torch.Tensor:
+        """
+        x를 scale로 다운샘플 후, 반드시 원본 (H,W)로 업샘플해서 반환.
+        Odd 해상도에서도 항상 입력과 동일 크기 보장.
+        """
+        B, C, H, W = x.shape
+        # 다운샘플 목표 크기(최소 1 보장)
+        h2 = max(1, int(round(H * scale)))
+        w2 = max(1, int(round(W * scale)))
+
+        y = F.interpolate(x, size=(h2, w2), mode=mode, align_corners=align_corners)
+        y = F.interpolate(y, size=(H, W), mode=mode, align_corners=align_corners)
+
+        # 안전장치
+        if y.shape[-2:] != (H, W):
+            y = F.interpolate(y, size=(H, W), mode=mode, align_corners=align_corners)
+        return y
+    
     def interpolate(self, img, factor):
         return F.interpolate(F.interpolate(img, scale_factor=factor, mode='nearest', recompute_scale_factor=True), scale_factor=1/factor, mode='nearest', recompute_scale_factor=True)
     def forward(self, x):
@@ -163,7 +184,7 @@ class ResNet(nn.Module):
         # n,c,w,h = x.shape
         # if w%2 == 1 : x = x[:,:,:-1,:]
         # if h%2 == 1 : x = x[:,:,:,:-1]
-        NPR  = x - self.interpolate(x, 0.5)
+        NPR  = x - self._down_up_same(x, 0.5)
 
         x = self.conv1(NPR*2.0/3.0)
         x = self.bn1(x)
